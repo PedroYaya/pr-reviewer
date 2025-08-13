@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Simple test script for the GitHub App PR Reviewer
+Simple test script for the GitHub App PR Reviewer with LangChain
 """
 
 import os
@@ -36,9 +36,9 @@ def test_imports():
     """Test if all required modules can be imported"""
     try:
         from github_app import GitHubApp
-        from ai_reviewer import AIReviewer
-        from webhook_handler import WebhookHandler
-        print("✅ All modules imported successfully")
+        from ai_reviewer import LangChainAIReviewer
+        from webhook_handler import LangChainWebhookHandler
+        print("✅ All LangChain modules imported successfully")
         return True
     except ImportError as e:
         print(f"❌ Import error: {e}")
@@ -56,25 +56,25 @@ def test_github_app():
         return False
 
 def test_ai_reviewer():
-    """Test AI Reviewer initialization"""
+    """Test LangChain AI Reviewer initialization"""
     try:
-        from ai_reviewer import AIReviewer
-        reviewer = AIReviewer()
-        print("✅ AI Reviewer initialized successfully")
+        from ai_reviewer import LangChainAIReviewer
+        reviewer = LangChainAIReviewer()
+        print("✅ LangChain AI Reviewer initialized successfully")
         return True
     except Exception as e:
-        print(f"❌ AI Reviewer initialization failed: {e}")
+        print(f"❌ LangChain AI Reviewer initialization failed: {e}")
         return False
 
 def main():
     """Run all tests"""
-    print("🧪 Testing GitHub App PR Reviewer...\n")
+    print("🧪 Testing GitHub App PR Reviewer with LangChain...\n")
     
     tests = [
         ("Environment Variables", test_environment),
-        ("Module Imports", test_imports),
+        ("LangChain Module Imports", test_imports),
         ("GitHub App", test_github_app),
-        ("AI Reviewer", test_ai_reviewer),
+        ("LangChain AI Reviewer", test_ai_reviewer),
     ]
     
     passed = 0
@@ -89,7 +89,7 @@ def main():
     print(f"📊 Test Results: {passed}/{total} tests passed")
     
     if passed == total:
-        print("🎉 All tests passed! Your setup is ready.")
+        print("🎉 All tests passed! Your LangChain setup is ready.")
         return 0
     else:
         print("⚠️  Some tests failed. Please check the issues above.")

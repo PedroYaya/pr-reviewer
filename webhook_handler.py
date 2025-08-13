@@ -1,6 +1,6 @@
 """
-Webhook Handler Module
-Processes GitHub webhook events and orchestrates the review process
+Webhook Handler Module with LangChain
+Enhanced version with better AI integration
 """
 
 import hmac
@@ -9,13 +9,13 @@ import json
 import logging
 from typing import Dict, Any, Optional
 from github_app import GitHubApp
-from ai_reviewer import AIReviewer
+from ai_reviewer import LangChainAIReviewer
 
 
-class WebhookHandler:
+class LangChainWebhookHandler:
     def __init__(self):
         self.github_app = GitHubApp()
-        self.ai_reviewer = AIReviewer()
+        self.ai_reviewer = LangChainAIReviewer()
         self.logger = logging.getLogger(__name__)
     
     def handle_webhook(self, event_type: str, payload: Dict[str, Any], 
@@ -67,7 +67,7 @@ class WebhookHandler:
         return hmac.compare_digest(expected_signature, computed_signature)
     
     def _handle_pull_request_event(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """Handle pull request events"""
+        """Handle pull request events with enhanced AI review"""
         action = payload.get('action')
         pr_data = payload.get('pull_request', {})
         
@@ -102,7 +102,7 @@ class WebhookHandler:
             if not files_changed:
                 return {"message": "No files changed in this PR"}
             
-            # Generate AI review
+            # Generate enhanced AI review using LangChain
             review_comment = self.ai_reviewer.review_code_changes(
                 pr_title, pr_description, files_changed
             )
@@ -112,13 +112,14 @@ class WebhookHandler:
                 installation_id, owner, repo_name, pr_number, review_comment
             )
             
-            self.logger.info(f"Review posted successfully for PR #{pr_number}")
+            self.logger.info(f"Enhanced review posted successfully for PR #{pr_number}")
             
             return {
                 "success": True,
-                "message": f"Review posted for PR #{pr_number}",
+                "message": f"Enhanced review posted for PR #{pr_number}",
                 "comment_id": comment_result.get('id'),
-                "files_reviewed": len(files_changed)
+                "files_reviewed": len(files_changed),
+                "ai_model": "LangChain + GPT-4"
             }
             
         except Exception as e:
@@ -139,4 +140,8 @@ class WebhookHandler:
             'state': pr_data.get('state', ''),
             'created_at': pr_data.get('created_at', ''),
             'updated_at': pr_data.get('updated_at', '')
-        } 
+        }
+    
+    def clear_ai_memory(self):
+        """Clear the AI reviewer's memory"""
+        self.ai_reviewer.clear_memory()

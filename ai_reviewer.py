@@ -1,25 +1,111 @@
 """
-AI Code Reviewer Module
-Integrates with OpenAI to analyze code changes and generate review comments
+AI Code Reviewer Module with LangChain
+Enhanced version with better context handling and intelligent prompts
 """
 
 import os
-import openai
 from typing import List, Dict, Any
+from langchain_openai import ChatOpenAI
+from langchain.prompts import ChatPromptTemplate, SystemMessagePromptTemplate, HumanMessagePromptTemplate
+from langchain.schema import HumanMessage, SystemMessage
+from langchain.chains import LLMChain
+from langchain.memory import ConversationBufferMemory
 
 
-class AIReviewer:
+class LangChainAIReviewer:
     def __init__(self):
         api_key = os.getenv('OPENAI_API_KEY')
         if not api_key:
             raise ValueError("OPENAI_API_KEY environment variable is required")
         
-        openai.api_key = api_key
-        self.model = "gpt-4"  # You can change this to gpt-3.5-turbo if needed
+        # Initialize LangChain components
+        self.llm = ChatOpenAI(
+            model="gpt-4",
+            temperature=0.3,
+            api_key=api_key
+        )
+        
+        # Memory for maintaining context between reviews
+        self.memory = ConversationBufferMemory(
+            memory_key="chat_history",
+            return_messages=True
+        )
+        
+        # Create the review chain
+        self.review_chain = self._create_review_chain()
+    
+    def _create_review_chain(self):
+        """Create the LangChain review chain"""
+        
+        # System prompt template
+        system_template = """You are an expert software engineer performing a code review. 
+        Your task is to analyze code changes in a pull request and provide constructive feedback.
+        
+        Focus on:
+        1. Code quality and best practices
+        2. Potential bugs or issues
+        3. Security concerns
+        4. Performance implications
+        5. Maintainability and readability
+        6. Suggestions for improvement
+        
+        Be constructive, specific, and helpful. Use markdown formatting for better readability.
+        
+        Previous review context: {chat_history}"""
+        
+        system_message_prompt = SystemMessagePromptTemplate.from_template(system_template)
+        
+        # Human prompt template
+        human_template = """Please review the following pull request and provide detailed feedback:
+
+        **PR Title:** {pr_title}
+        **PR Description:** {pr_description}
+        
+        **Files Changed:**
+        {files_context}
+        
+        Please provide your review in the following format:
+        
+        ## 🤖 AI Code Review
+        
+        ### ✅ Positive Aspects
+        - [List any good practices, clean code, etc.]
+        
+        ### ⚠️ Issues Found
+        - [List any potential issues, bugs, or concerns]
+        
+        ### 🔧 Suggestions for Improvement
+        - [List specific suggestions for better code]
+        
+        ### 📝 Summary
+        [Overall assessment and recommendation]
+        
+        ### 🔍 Detailed Analysis
+        [Detailed analysis of the changes]
+        
+        Please be thorough but constructive in your feedback."""
+        
+        human_message_prompt = HumanMessagePromptTemplate.from_template(human_template)
+        
+        # Create the chat prompt
+        chat_prompt = ChatPromptTemplate.from_messages([
+            system_message_prompt,
+            human_message_prompt
+        ])
+        
+        # Create the chain
+        chain = LLMChain(
+            llm=self.llm,
+            prompt=chat_prompt,
+            memory=self.memory,
+            verbose=False
+        )
+        
+        return chain
     
     def review_code_changes(self, pr_title: str, pr_description: str, files_changed: List[Dict[str, Any]]) -> str:
         """
-        Review code changes and generate feedback
+        Review code changes using LangChain
         
         Args:
             pr_title: Title of the pull request
@@ -30,52 +116,26 @@ class AIReviewer:
             str: AI-generated review comment
         """
         
-        # Prepare the context for the AI
-        context = self._prepare_review_context(pr_title, pr_description, files_changed)
-        
-        # Create the prompt for code review
-        prompt = self._create_review_prompt(context)
-        
         try:
-            response = openai.ChatCompletion.create(
-                model=self.model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": """You are an experienced software engineer performing a code review. 
-                        Your task is to analyze the code changes in a pull request and provide constructive feedback.
-                        
-                        Focus on:
-                        1. Code quality and best practices
-                        2. Potential bugs or issues
-                        3. Security concerns
-                        4. Performance implications
-                        5. Maintainability and readability
-                        6. Suggestions for improvement
-                        
-                        Be constructive, specific, and helpful. Use markdown formatting for better readability."""
-                    },
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
-                ],
-                max_tokens=2000,
-                temperature=0.3
-            )
+            # Prepare the files context
+            files_context = self._prepare_files_context(files_changed)
             
-            return response.choices[0].message.content
+            # Run the review chain
+            result = self.review_chain.run({
+                'pr_title': pr_title,
+                'pr_description': pr_description,
+                'files_context': files_context
+            })
+            
+            return result
             
         except Exception as e:
             return f"❌ Error generating AI review: {str(e)}"
     
-    def _prepare_review_context(self, pr_title: str, pr_description: str, files_changed: List[Dict[str, Any]]) -> str:
-        """Prepare the context for the AI review"""
-        context = f"## Pull Request Information\n"
-        context += f"**Title:** {pr_title}\n"
-        context += f"**Description:** {pr_description}\n\n"
+    def _prepare_files_context(self, files_changed: List[Dict[str, Any]]) -> str:
+        """Prepare enhanced context for the AI review"""
+        context = ""
         
-        context += f"## Files Changed\n"
         for file_info in files_changed:
             filename = file_info.get('filename', 'Unknown')
             status = file_info.get('status', 'Unknown')
@@ -83,49 +143,19 @@ class AIReviewer:
             deletions = file_info.get('deletions', 0)
             changes = file_info.get('changes', 0)
             
-            context += f"- **{filename}** ({status})\n"
-            context += f"  - Additions: +{additions}\n"
-            context += f"  - Deletions: -{deletions}\n"
-            context += f"  - Total changes: {changes}\n"
+            context += f"**{filename}** ({status})\n"
+            context += f"- Additions: +{additions}\n"
+            context += f"- Deletions: -{deletions}\n"
+            context += f"- Total changes: {changes}\n"
             
             # Include the patch if available
             patch = file_info.get('patch', '')
             if patch:
-                context += f"  - **Changes:**\n```diff\n{patch}\n```\n"
+                context += f"- **Changes:**\n```diff\n{patch}\n```\n"
             
             context += "\n"
         
         return context
-    
-    def _create_review_prompt(self, context: str) -> str:
-        """Create the prompt for the AI review"""
-        prompt = f"""
-Please review the following pull request and provide detailed feedback:
-
-{context}
-
-Please provide your review in the following format:
-
-## 🤖 AI Code Review
-
-### ✅ Positive Aspects
-- [List any good practices, clean code, etc.]
-
-### ⚠️ Issues Found
-- [List any potential issues, bugs, or concerns]
-
-### 🔧 Suggestions for Improvement
-- [List specific suggestions for better code]
-
-### 📝 Summary
-[Overall assessment and recommendation]
-
-### 🔍 Detailed Analysis
-[Detailed analysis of the changes]
-
-Please be thorough but constructive in your feedback.
-"""
-        return prompt
     
     def generate_summary_comment(self, pr_title: str, files_changed: List[Dict[str, Any]]) -> str:
         """Generate a quick summary comment for the PR"""
@@ -146,4 +176,8 @@ Please be thorough but constructive in your feedback.
             status = file_info.get('status', 'Unknown')
             summary += f"- `{filename}` ({status})\n"
         
-        return summary 
+        return summary
+    
+    def clear_memory(self):
+        """Clear the conversation memory"""
+        self.memory.clear()
