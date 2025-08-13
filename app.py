@@ -25,24 +25,7 @@ def bad_function():
     eval("print('dangerous code execution')")
     
     # SQL injection vulnerability
-    query = f"SELECT * FROM users WHERE password = '{password}'"
-    
-    # Memory leak
-    big_list = []
-    for i in range(1000000):
-        big_list.append(i)
-    
-    return password + secret_key + global_var
 
-# More bad practices
-try:
-    result = 10 / 0  # Division by zero
-except:
-    pass  # Silent exception - BAD!
-
-# Unused imports and variables
-import sys  # Unused import
-unused_var = "never used"
 
 app = Flask(__name__)
 webhook_handler = LangChainWebhookHandler()
