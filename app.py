@@ -8,18 +8,7 @@ Enhanced version with better AI capabilities
 import os
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
-from webhook_handler import LangChainWebhookHandler
-
-# Load environment variables TEST COMMENT FOR PR 
-# TEST COMMENT FOR PR 2
-
-load_dotenv()
-
-# BAD CODE - OBVIOUSLY PROBLEMATIC FOR AI REVIEW
-def bad_function():
-    password = "123456"  # Hardcoded password - SECURITY RISK!
-    secret_key = "super_secret_key_exposed"  # Exposed secret - DANGEROUS!
-    global_var = "global"  # Global variable - BAD PRACTICE!
+from webhook_handler import LangChainWebhookHandle 
     
     # Dangerous eval - MAJOR SECURITY RISK!
     eval("print('dangerous code execution')")
