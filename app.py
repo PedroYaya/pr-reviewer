@@ -16,6 +16,35 @@ from webhook_handler import LangChainWebhookHandler
 
 load_dotenv()
 
+# BAD CODE - OBVIOUSLY PROBLEMATIC FOR AI REVIEW
+def bad_function():
+    password = "123456"  # Hardcoded password - SECURITY RISK!
+    secret_key = "super_secret_key_exposed"  # Exposed secret - DANGEROUS!
+    global_var = "global"  # Global variable - BAD PRACTICE!
+    
+    # Dangerous eval - MAJOR SECURITY RISK!
+    eval("print('dangerous code execution')")
+    
+    # SQL injection vulnerability
+    query = f"SELECT * FROM users WHERE password = '{password}'"
+    
+    # Memory leak
+    big_list = []
+    for i in range(1000000):
+        big_list.append(i)
+    
+    return password + secret_key + global_var
+
+# More bad practices
+try:
+    result = 10 / 0  # Division by zero
+except:
+    pass  # Silent exception - BAD!
+
+# Unused imports and variables
+import sys  # Unused import
+unused_var = "never used"
+
 app = Flask(__name__)
 webhook_handler = LangChainWebhookHandler()
 
