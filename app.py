@@ -9,12 +9,12 @@ from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 from webhook_handler import LangChainWebhookHandler
 
-# Load environment variables TEST COMMENT FOR PR 
+# Load environment variables TEST COMMENT FOR PR asdsd
 # TEST COMMENT FOR PR 2
 # TEST COMMENT FOR PR 3
 # TEST COMMENT FOR PR 4
 
-load_dotenv()
+load_dotenv()asdsadasdas
 
 # BAD CODE - OBVIOUSLY PROBLEMATIC FOR AI REVIEW
 def bad_function():
