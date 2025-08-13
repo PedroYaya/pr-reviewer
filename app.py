@@ -6,18 +6,7 @@ def home():
     """Home endpoint for health checks"""
     return jsonify({
         "status": "ok",
-        "message": "GitHub App PR Reviewer with LangChain is running",
-        "version": "2.0.0",
-        "ai_engine": "LangChain + GPT-4",
-        "features": [
-            "Enhanced AI code review",
-            "Context memory between reviews",
-            "Intelligent prompt templates",
-            "Better code analysis"
-        ]
-    })
-
-@app.route('/webhook', methods=['POST'])
+        "message": "Gi
 def webhook():
     """Handle GitHub webhook events with LangChain AI"""
     try:
