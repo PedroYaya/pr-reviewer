@@ -4,7 +4,7 @@ GitHub App PR Reviewer with LangChain - Mainasdasdasdasd Application
 Enhanced version with better AI capabilities
 """
 
-import os
+import osd
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 from webhook_handler import LangChainWebhookHandlereee
