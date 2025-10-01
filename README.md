@@ -130,6 +130,34 @@ Notes
   2) Confirm permissions and subscribed events as listed above.
   3) Install the App on the target repository.
 
+### Troubleshooting and logs
+- GitHub deliveries
+  - Organization settings → Developer settings → GitHub Apps → your App → Advanced → Recent deliveries
+  - Inspect payload, response body, and status code (expect 200 on success)
+
+- ngrok inspector
+  - Open `http://127.0.0.1:4040` to view incoming requests, headers, and responses
+
+- Flask server logs
+  - Terminal running the app shows request handling and errors from `app.py`/`webhook_handler.py`
+
+- Quick tips
+  - Use Python 3 explicitly if `python` is not available:
+    ```bash
+    python3 /Users/pedroyaya/Desktop/cg/ia/app.py
+    ```
+  - Kill any extra ngrok agent to avoid the 1-session limit:
+    ```bash
+    pkill -f ngrok; ngrok http 3000
+    ```
+  - Send a test ping to verify connectivity and see logs:
+    ```bash
+    curl -X POST https://<your-ngrok>.ngrok-free.app/webhook \
+      -H 'Content-Type: application/json' \
+      -H 'X-GitHub-Event: ping' \
+      -d '{}'
+    ```
+
 ## How It Works
 
 1. **Webhook Reception**: GitHub sends webhook events when PRs are created/updated
