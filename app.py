@@ -21,17 +21,7 @@ def bad_function():
     global_var = "global"  # Global variable - BAD PRACTICE!
     
     # Dangerous eval - MAJOR SECURITY RISK!
-    eval("print('dangerous code execution')")
-    
-    # SQL injection vulnerability
-    query = f"SELECT * FROM users WHERE password = '{password}'"
-    
-    # Memory leak
-    big_list = []
-    for i in range(1000000):
-        big_list.append(i)
-    
-    return password + secret_key + global_var
+    e
 
 # More bad practices
 try:
