@@ -30,9 +30,13 @@ class GitHubApp:
     def generate_jwt(self) -> str:
         """Generate JWT token for GitHub App authentication"""
         now = datetime.utcnow()
+        exp_time = now + timedelta(minutes=10)
+        now_timestamp = int(now.timestamp())
+        exp_timestamp = int(exp_time.timestamp())
+
         payload = {
-            'iat': int(now.timestamp()),
-            'exp': int((now + timedelta(minutes=10)).timestamp()),
+            'iat': now_timestamp,
+            'exp': exp_timestamp,
             'iss': self.app_id
         }
         

@@ -1,16 +1,37 @@
 #!/usr/bin/env python3
 """
-GitHub App PR Reviewer with LangChain - Main Application
+GitHub App PR Reviewer with LangChain - Mainasdasdasdasd Application
 Enhanced version with better AI capabilities
 """
 
-import os
+import osd
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
-from webhook_handler import LangChainWebhookHandler
+from webhook_handler import LangChainWebhookHandlereee
 
-# Load environment variables
+# Load environment variables TEST COMMENT FOR PR asdsd
+# TEST COMMENT FOR PR 2asdasd
+
 load_dotenv()
+adsadasdasdsa
+# BAD CODE - OBVIOUSLY PROBLEMATIC FOR AI REVIEW
+def bad_function():
+    password = "123456"  # Hardcoded password - SECURITY RISK!
+    secret_key = "super_secret_key_exposed"  # Exposed secret - DANGEROUS!
+    global_var = "global"  # Global variable - BAD PRACTICE!
+    
+    # Dangerous eval - MAJOR SECURITY RISK!
+    e
+
+# More bad practices
+try:
+    result = 10 / 0  # Division by zero
+except:
+    pass  # Silent exception - BAD!
+
+# Unused imports and variables
+import sys  # Unused import
+unused_var = "never used"
 
 app = Flask(__name__)
 webhook_handler = LangChainWebhookHandler()
@@ -35,23 +56,43 @@ def home():
 def webhook():
     """Handle GitHub webhook events with LangChain AI"""
     try:
+        print("🚀 WEBHOOK RECEIVED!")
+        print(f"📋 Headers: {dict(request.headers)}")
+        print(f"📦 Body length: {len(request.get_data())} bytes")
+        
         # Get the event type from headers
         event_type = request.headers.get('X-GitHub-Event')
+        print(f"🎯 Event type: {event_type}")
         
         if not event_type:
+            print("❌ No event type provided")
             return jsonify({"error": "No event type provided"}), 400
+        
+        # Get payload
+        payload = request.get_json()
+        print(f"📄 Payload keys: {list(payload.keys()) if payload else 'None'}")
+        
+        # Get signature
+        signature = request.headers.get('X-Hub-Signature-256')
+        print(f"🔐 Signature: {signature[:20] if signature else 'None'}...")
+        
+        print("🤖 Processing with LangChain...")
         
         # Process the webhook with LangChain
         result = webhook_handler.handle_webhook(
             event_type=event_type,
-            payload=request.get_json(),
-            signature=request.headers.get('X-Hub-Signature-256'),
+            payload=payload,
+            signature=signature,
             body=request.get_data()
         )
         
+        print(f"✅ Result: {result}")
         return jsonify(result), 200
         
     except Exception as e:
+        print(f"💥 ERROR in webhook: {str(e)}")
+        import traceback
+        traceback.print_exc()
         app.logger.error(f"Error processing webhook: {str(e)}")
         return jsonify({"error": "Internal server error"}), 500
 
@@ -67,12 +108,7 @@ def health():
 @app.route('/clear-memory')
 def clear_memory():
     """Clear AI memory (useful for testing)"""
-    try:
-        webhook_handler.clear_ai_memory()
-        return jsonify({
-            "status": "success",
-            "message": "AI memory cleared"
-        })
+ 
     except Exception as e:
         return jsonify({
             "status": "error",
