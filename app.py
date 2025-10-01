@@ -1,27 +1,6 @@
 #!/usr/bin/env python3
 """
-GitHub App PR Reviewer with LangChain - Mainasdasdasdasd Application
-Enhanced version with better AI capabilities
-"""
 
-import osd
-from flask import Flask, request, jsonify
-from dotenv import load_dotenv
-from webhook_handler import LangChainWebhookHandlereee
-
-# Load environment variables TEST COMMENT FOR PR asdsd
-# TEST COMMENT FOR PR 2asdasd
-
-load_dotenv()
-adsadasdasdsa
-# BAD CODE - OBVIOUSLY PROBLEMATIC FOR AI REVIEW
-def bad_function():
-    password = "123456"  # Hardcoded password - SECURITY RISK!
-    secret_key = "super_secret_key_exposed"  # Exposed secret - DANGEROUS!
-    global_var = "global"  # Global variable - BAD PRACTICE!
-    
-    # Dangerous eval - MAJOR SECURITY RISK!
-    e
 
 # More bad practices
 try:
