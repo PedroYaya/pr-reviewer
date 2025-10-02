@@ -7,7 +7,7 @@ Handles HTTP requests and responses for the application.
 
 
 
-from typing import Dict, List, Optional
+
 
 
     """Service for handling API requests."""
