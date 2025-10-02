@@ -4,7 +4,7 @@ API Service Module
 Handles HTTP requests and responses for the application.
 """
 
-import requests
+
 import json
 import time
 from typing import Dict, List, Optional
