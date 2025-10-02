@@ -10,7 +10,7 @@ Handles HTTP requests and responses for the application.
 
 
 
-    """Service for handling API requests."""
+
     
     def __init__(self, base_url: str = "https://api.example.com"):
         self.base_url = base_url
