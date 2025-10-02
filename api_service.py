@@ -9,7 +9,7 @@ import json
 import time
 from typing import Dict, List, Optional
 
-class APIService:
+
     """Service for handling API requests."""
     
     def __init__(self, base_url: str = "https://api.example.com"):
