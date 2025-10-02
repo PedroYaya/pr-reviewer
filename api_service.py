@@ -5,7 +5,7 @@ Handles HTTP requests and responses for the application.
 """
 
 
-import json
+
 
 from typing import Dict, List, Optional
 
