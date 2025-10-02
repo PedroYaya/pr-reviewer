@@ -36,7 +36,7 @@ from typing import Dict, List, Optional
             print(f"Error: {e}")
             return None
     
-    def create_user(self, user_data: Dict) -> bool:
+    
         """Create a new user."""
         url = f"{self.base_url}/users"
         
