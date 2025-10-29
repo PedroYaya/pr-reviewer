@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
 """
+
 GitHub App PR Reviewer with LangChain - Main Application
 Enhanced version with better AI capabilities
 """
 
-import os
-from flask import Flask, request, jsonify
-from dotenv import load_dotenv
-from webhook_handler import LangChainWebhookHandler
+
 
 # Load environment variables
 load_dotenv()
