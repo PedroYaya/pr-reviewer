@@ -5,9 +5,6 @@ GitHub App PR Reviewer with LangChain - Main Application
 Enhanced version with better AI capabilities
 """
 
-import os
-from dotenv import load_dotenv
-from webhook_handler import LangChainWebhookHandler
 
 
 # Load environment variables
