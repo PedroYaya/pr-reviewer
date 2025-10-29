@@ -5,9 +5,6 @@ Enhanced version with better AI capabilities
 """
 
 import os
-from flask import Flask, request, jsonify
-from dotenv import load_dotenv
-from webhook_handler import LangChainWebhookHandler
 
 # Load environment variables
 load_dotenv()
