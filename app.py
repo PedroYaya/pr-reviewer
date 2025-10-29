@@ -88,11 +88,7 @@ def health():
 def clear_memory():
     """Clear AI memory (useful for testing)"""
  
-    except Exception as e:
-        return jsonify({
-            "status": "error",
-            "message": f"Failed to clear memory: {str(e)}"
-        }), 500
+
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 3000))
