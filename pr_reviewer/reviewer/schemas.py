@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 Severity = Literal["critical", "major", "minor", "nit"]
 Category = Literal["bug", "security", "performance", "maintainability", "style", "testing"]
+Confidence = Literal["high", "medium", "low"]
 
 SEVERITY_ORDER: dict[str, int] = {"critical": 0, "major": 1, "minor": 2, "nit": 3}
 
@@ -21,6 +22,7 @@ class ReviewFinding(BaseModel):
     line: int = Field(description="Line number in the NEW version of the file, taken from the numbered diff")
     severity: Severity
     category: Category
+    confidence: Confidence = Field(description="How sure you are this is a real problem; low-confidence findings are discarded")
     title: str = Field(description="One-line description of the problem")
     explanation: str = Field(description="Why this is a problem and what can go wrong")
     suggestion: str | None = Field(description="Concrete fix, or null if there is no obvious one")

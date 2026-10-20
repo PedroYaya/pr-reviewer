@@ -49,6 +49,7 @@ def finding(path: str = "app.py", line: int = 2, severity: str = "major", **over
         "line": line,
         "severity": severity,
         "category": "bug",
+        "confidence": "high",
         "title": "Off-by-one",
         "explanation": "Loop skips the last item.",
         "suggestion": None,

@@ -91,3 +91,46 @@ def test_ping(client):
 
 def test_health(client):
     assert client.get("/health").json() == {"status": "ok"}
+
+
+def comment_payload(body="/ai-review", association="MEMBER", user_type="User", action="created", on_pr=True):
+    issue = {"number": 7, **({"pull_request": {"url": "..."}} if on_pr else {})}
+    return {
+        "action": action,
+        "issue": issue,
+        "comment": {"body": body, "author_association": association, "user": {"login": "maria", "type": user_type}},
+        "repository": {"name": "repo", "owner": {"login": "acme"}},
+        "installation": {"id": 42},
+    }
+
+
+@pytest.mark.parametrize(
+    "body, kind",
+    [("/ai-review", "review"), ("/ai-review approve", "approve"), ("/AI-review Dismiss\nthanks", "dismiss")],
+)
+def test_queues_commands_from_trusted_users(client, queue, body, kind):
+    response = post(client, comment_payload(body), event="issue_comment")
+
+    assert response.status_code == 202
+    job = queue.dequeue(timeout=0)
+    assert (job.kind, job.pr_number, job.head_sha, job.requested_by) == (kind, 7, None, "maria")
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        comment_payload(association="CONTRIBUTOR"),
+        comment_payload(association="NONE"),
+        comment_payload(user_type="Bot"),
+        comment_payload(body="please /ai-review approve"),
+        comment_payload(body="/ai-review merge"),
+        comment_payload(action="edited"),
+        comment_payload(on_pr=False),
+        comment_payload(body=""),
+    ],
+)
+def test_ignores_other_comments(client, queue, payload):
+    response = post(client, payload, event="issue_comment")
+
+    assert response.json()["status"] == "ignored"
+    assert len(queue) == 0

@@ -27,6 +27,22 @@ Each review is stateless. No context is shared between PRs.
 5. **Structured output** (`reviewer/schemas.py`): the model finishes by calling the `ReviewResult` tool. OpenAI strict mode constrains its arguments to the schema, and Pydantic validates them: a summary plus findings with `path`, `line`, `severity`, `category`, `title`, `explanation` and `suggestion`. If the model uses up the tool rounds, `ReviewResult` is forced.
 6. **Publishing** (`reviewer/publisher.py`): findings become a GitHub pull request review, ordered by severity. Findings on lines that are in the diff become inline comments. Findings on other lines go in the review body, because a single invalid line makes GitHub reject the whole review with a 422.
 
+### Guardrails
+
+- **Secrets never reach the LLM** (`reviewer/guardrails.py`): AWS, GitHub, OpenAI and Slack tokens, private key blocks, and quoted values assigned to names like `*password*`, `*secret*`, `*api_key*` or `*token*` are redacted from the diff and from every file the agent reads. Redaction keeps the line count, so diff line numbers stay valid. Each secret on an added line becomes a deterministic critical security finding.
+- **Prompt injection**: the PR title, description, diff and conventions go to the model inside `<untrusted>` blocks. The system prompt tells it to treat them as data, and any `<untrusted>` tag inside that content is escaped so it can't close the block early.
+- **Output filtering**: findings are dropped when they point at a file outside the reviewed diff, have low confidence or repeat another finding at the same location and category. Whatever remains is capped at `MAX_FINDINGS`, keeping the most severe. Every dropped finding is logged with the reason.
+
+### Human-in-the-loop
+
+| Comment on a PR | Effect |
+|---|---|
+| `/ai-review` | Review the current head commit now |
+| `/ai-review approve` | Publish the pending draft (approval mode) |
+| `/ai-review dismiss` | Discard the pending draft |
+
+Commands are only accepted from users whose association with the repo is `OWNER`, `MEMBER` or `COLLABORATOR`, and comments from bots are ignored. With `REVIEW_MODE=approval`, the bot doesn't publish anything on its own. It posts a draft comment with a table of findings, and the review is published only when a maintainer approves it. If new commits arrive after the draft was made, approving it is refused.
+
 ## Setup
 
 ```bash
@@ -44,6 +60,8 @@ cp env.example .env   # fill in GitHub App and OpenAI values
 | `OPENAI_EMBEDDING_MODEL` | reviewer | Defaults to `text-embedding-3-small` |
 | `DIFF_TOKEN_BUDGET`, `FILE_TOKEN_BUDGET` | reviewer | Defaults to 24000 / 6000 tokens |
 | `CONVENTIONS_TOP_K` | reviewer | Convention snippets added to the prompt (default 6) |
+| `REVIEW_MODE` | reviewer | `auto` (default) or `approval` |
+| `MAX_FINDINGS` | reviewer | Cap on findings per review (default 15) |
 
 ## Running locally
 
@@ -70,7 +88,7 @@ The App already exists in the organization. Org App admins manage these settings
 
 - Webhook URL: `https://<host>/webhook`
 - Repository permissions: Pull requests (Read & write), Contents (Read)
-- Subscribed events: Pull requests
+- Subscribed events: Pull requests, Issue comments (for `/ai-review` commands)
 - Install the App on each repository you want reviewed
 
 ## Troubleshooting

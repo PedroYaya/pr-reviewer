@@ -18,6 +18,7 @@ from pr_reviewer.common.logging import configure_logging
 from pr_reviewer.common.queue import RedisJobQueue
 from pr_reviewer.reviewer.agent import ReviewAgent
 from pr_reviewer.reviewer.budget import TokenBudget
+from pr_reviewer.reviewer.drafts import RedisDraftStore
 from pr_reviewer.reviewer.worker import ReviewWorker
 
 
@@ -36,6 +37,9 @@ def build_worker(settings: ReviewerSettings) -> ReviewWorker:
         embeddings=embeddings,
         budget=TokenBudget(diff_tokens=settings.diff_token_budget, file_tokens=settings.file_token_budget),
         review_comments_limit=settings.review_comments_limit,
+        review_mode=settings.review_mode,
+        max_findings=settings.max_findings,
+        drafts=RedisDraftStore(redis_client, settings.draft_ttl_seconds),
     )
 
 

@@ -16,10 +16,15 @@ from fastapi.responses import JSONResponse
 from pr_reviewer.common.config import GatewaySettings
 from pr_reviewer.common.logging import configure_logging
 from pr_reviewer.common.queue import JobQueue, RedisJobQueue
-from pr_reviewer.gateway.events import job_from_pull_request_event
+from pr_reviewer.gateway.events import job_from_issue_comment_event, job_from_pull_request_event
 from pr_reviewer.gateway.signature import is_valid_signature
 
 logger = logging.getLogger(__name__)
+
+EVENT_PARSERS = {
+    "pull_request": job_from_pull_request_event,
+    "issue_comment": job_from_issue_comment_event,
+}
 
 
 def create_app(settings: GatewaySettings | None = None, queue: JobQueue | None = None) -> FastAPI:
@@ -48,15 +53,18 @@ def create_app(settings: GatewaySettings | None = None, queue: JobQueue | None =
 
         if x_github_event == "ping":
             return JSONResponse({"status": "pong"})
-        if x_github_event != "pull_request":
+        parse = EVENT_PARSERS.get(x_github_event)
+        if parse is None:
             return JSONResponse({"status": "ignored", "reason": f"event '{x_github_event}'"})
 
-        job = job_from_pull_request_event(json.loads(body), x_github_delivery)
+        job = parse(json.loads(body), x_github_delivery)
         if job is None:
-            return JSONResponse({"status": "ignored", "reason": "action not reviewable"})
+            return JSONResponse({"status": "ignored", "reason": "nothing to do for this event"})
 
         await run_in_threadpool(queue.enqueue, job)
-        logger.info("Queued review delivery=%s pr=%s/%s#%s", job.delivery_id, job.owner, job.repo, job.pr_number)
+        logger.info(
+            "Queued %s delivery=%s pr=%s/%s#%s", job.kind, job.delivery_id, job.owner, job.repo, job.pr_number
+        )
         return JSONResponse({"status": "queued", "delivery_id": job.delivery_id}, status_code=202)
 
     return app

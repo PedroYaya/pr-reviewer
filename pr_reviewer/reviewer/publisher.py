@@ -53,3 +53,18 @@ def build_review(
             f"- `{o.filename}`: {o.reason}" for o in omitted
         ) + "\n</details>"
     return body, comments
+
+
+def build_draft_comment(result: ReviewResult, comments: list[dict[str, Any]], head_sha: str) -> str:
+    """Issue comment that previews a draft review so a maintainer can decide whether to publish it."""
+    findings = sorted(result.findings, key=lambda f: SEVERITY_ORDER[f.severity])
+    text = (
+        f"## 🤖 AI review draft for `{head_sha[:7]}`\n\n{result.summary}\n\n"
+        f"{len(findings)} finding(s), {len(comments)} of them inline."
+    )
+    if findings:
+        text += "\n\n| Severity | Location | Finding |\n|---|---|---|\n" + "\n".join(
+            f"| {SEVERITY_ICONS[f.severity]} {f.severity} | `{f.path}:{f.line}` | {f.title.replace('|', '/')} |"
+            for f in findings
+        )
+    return text + "\n\nA maintainer can reply `/ai-review approve` to publish it or `/ai-review dismiss` to discard it."

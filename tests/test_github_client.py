@@ -122,3 +122,13 @@ def test_lists_recent_review_comments(private_key):
     _, url, kwargs = session.requests[0]
     assert url.endswith("/repos/acme/repo/pulls/comments")
     assert kwargs["params"] == {"sort": "created", "direction": "desc", "per_page": 50}
+
+
+def test_creates_issue_comment(private_key):
+    session = FakeSession(pages=[{"id": 3}])
+    client = GitHubAppClient("123", private_key, session=session)
+
+    client.create_issue_comment(1, "acme", "repo", 7, "hello")
+
+    method, url, kwargs = session.requests[0]
+    assert (method, url.endswith("/repos/acme/repo/issues/7/comments"), kwargs["json"]) == ("POST", True, {"body": "hello"})

@@ -1,5 +1,5 @@
 from pr_reviewer.reviewer.budget import OmittedFile
-from pr_reviewer.reviewer.publisher import build_review
+from pr_reviewer.reviewer.publisher import build_draft_comment, build_review
 from pr_reviewer.reviewer.schemas import ReviewResult
 from tests.fakes import finding
 
@@ -54,3 +54,12 @@ def test_lists_omitted_files_in_collapsible_section():
 
     assert "<details><summary>1 file(s) not reviewed</summary>" in body
     assert "- `poetry.lock`: lock file or generated code" in body
+
+
+def test_draft_comment_previews_findings_and_commands():
+    text = build_draft_comment(result(finding(line=2, title="Bad | pipe")), comments=[{"line": 2}], head_sha="abcdef123")
+
+    assert "AI review draft for `abcdef1`" in text
+    assert "1 finding(s), 1 of them inline." in text
+    assert "| 🟠 major | `app.py:2` | Bad / pipe |" in text
+    assert "`/ai-review approve`" in text and "`/ai-review dismiss`" in text

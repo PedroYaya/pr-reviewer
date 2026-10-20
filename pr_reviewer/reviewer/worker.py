@@ -2,6 +2,7 @@
 
 import logging
 import threading
+from typing import Any, Literal
 
 from langchain_core.embeddings import Embeddings
 
@@ -11,8 +12,15 @@ from pr_reviewer.common.queue import JobQueue
 from pr_reviewer.reviewer.agent import ReviewAgent
 from pr_reviewer.reviewer.budget import TokenBudget, select_files
 from pr_reviewer.reviewer.conventions import guideline_documents, review_comment_documents
-from pr_reviewer.reviewer.publisher import build_review
-from pr_reviewer.reviewer.repo_tools import GitHubRepoReader
+from pr_reviewer.reviewer.drafts import DraftStore, InMemoryDraftStore, ReviewDraft, draft_key
+from pr_reviewer.reviewer.guardrails import (
+    RedactingRepoReader,
+    apply_output_guardrails,
+    redact_files,
+    secret_findings,
+)
+from pr_reviewer.reviewer.publisher import build_draft_comment, build_review
+from pr_reviewer.reviewer.repo_tools import GitHubRepoReader, RepoReader
 from pr_reviewer.reviewer.retrieval import ConventionIndex
 
 logger = logging.getLogger(__name__)
@@ -22,6 +30,9 @@ POLL_TIMEOUT_SECONDS = 5
 QUEUE_ERROR_BACKOFF_SECONDS = 2
 DEFAULT_BUDGET = TokenBudget(diff_tokens=24_000, file_tokens=6_000)
 DEFAULT_REVIEW_COMMENTS_LIMIT = 100
+DEFAULT_MAX_FINDINGS = 15
+
+ReviewMode = Literal["auto", "approval"]
 
 
 class ReviewWorker:
@@ -33,6 +44,9 @@ class ReviewWorker:
         embeddings: Embeddings | None = None,
         budget: TokenBudget = DEFAULT_BUDGET,
         review_comments_limit: int = DEFAULT_REVIEW_COMMENTS_LIMIT,
+        review_mode: ReviewMode = "auto",
+        max_findings: int = DEFAULT_MAX_FINDINGS,
+        drafts: DraftStore | None = None,
     ):
         self._queue = queue
         self._github = github
@@ -40,11 +54,23 @@ class ReviewWorker:
         self._embeddings = embeddings
         self._budget = budget
         self._review_comments_limit = review_comments_limit
+        self._review_mode = review_mode
+        self._max_findings = max_findings
+        self._drafts = drafts if drafts is not None else InMemoryDraftStore()
         self._stop = threading.Event()
 
     def process(self, job: ReviewJob) -> None:
         pr = self._github.get_pull_request(job.installation_id, job.owner, job.repo, job.pr_number)
-        if pr["head"]["sha"] != job.head_sha:
+        if job.kind == "approve":
+            self._approve(job, pr)
+        elif job.kind == "dismiss":
+            self._dismiss(job)
+        else:
+            self._review(job, pr)
+
+    def _review(self, job: ReviewJob, pr: dict[str, Any]) -> None:
+        head_sha = pr["head"]["sha"]
+        if job.head_sha and job.head_sha != head_sha:
             # A newer push already queued its own job; don't review stale code.
             logger.info("Skipping stale job delivery=%s", job.delivery_id)
             return
@@ -55,23 +81,79 @@ class ReviewWorker:
             logger.info("Nothing reviewable delivery=%s omitted=%d", job.delivery_id, len(selection.omitted))
             return
 
-        repo = GitHubRepoReader(self._github, job.installation_id, job.owner, job.repo, job.head_sha)
+        # Input guardrail: the LLM only ever sees redacted diffs and files.
+        llm_files, secret_hits = redact_files(selection.files)
+        repo = RedactingRepoReader(GitHubRepoReader(self._github, job.installation_id, job.owner, job.repo, head_sha))
         conventions = self._load_conventions(job, repo)
         run = self._agent.review(
-            pr["title"], pr.get("body") or "", selection.files, repo, conventions=conventions, omitted=selection.omitted
-        )
-        body, comments = build_review(run.result, selection.files, selection.omitted)
-        self._github.create_review(
-            job.installation_id, job.owner, job.repo, job.pr_number, job.head_sha, body, comments
-        )
-        logger.info(
-            "Posted review delivery=%s pr=%s/%s#%s findings=%d inline=%d omitted=%d "
-            "input_tokens=%d output_tokens=%d llm_calls=%d tool_calls=%d",
-            job.delivery_id, job.owner, job.repo, job.pr_number, len(run.result.findings), len(comments),
-            len(selection.omitted), run.input_tokens, run.output_tokens, run.llm_calls, run.tool_calls,
+            pr["title"], pr.get("body") or "", llm_files, repo, conventions=conventions, omitted=selection.omitted
         )
 
-    def _load_conventions(self, job: ReviewJob, repo: GitHubRepoReader) -> ConventionIndex | None:
+        findings, dropped = apply_output_guardrails(
+            secret_findings(secret_hits) + run.result.findings, llm_files, self._max_findings
+        )
+        result = run.result.model_copy(update={"findings": findings})
+        body, comments = build_review(result, llm_files, selection.omitted)
+
+        if self._review_mode == "approval":
+            self._drafts.save(
+                draft_key(job.owner, job.repo, job.pr_number),
+                ReviewDraft(head_sha=head_sha, body=body, comments=comments),
+            )
+            self._github.create_issue_comment(
+                job.installation_id, job.owner, job.repo, job.pr_number,
+                build_draft_comment(result, comments, head_sha),
+            )
+        else:
+            self._github.create_review(
+                job.installation_id, job.owner, job.repo, job.pr_number, head_sha, body, comments
+            )
+
+        logger.info(
+            "Review %s delivery=%s pr=%s/%s#%s findings=%d inline=%d dropped=%d secrets=%d omitted=%d "
+            "input_tokens=%d output_tokens=%d llm_calls=%d tool_calls=%d",
+            "drafted" if self._review_mode == "approval" else "posted",
+            job.delivery_id, job.owner, job.repo, job.pr_number, len(findings), len(comments), len(dropped),
+            len(secret_hits), len(selection.omitted), run.input_tokens, run.output_tokens, run.llm_calls,
+            run.tool_calls,
+        )
+        for item in dropped:
+            logger.info(
+                "Guardrail dropped finding delivery=%s reason=%s location=%s:%s",
+                job.delivery_id, item.reason, item.finding.path, item.finding.line,
+            )
+
+    def _approve(self, job: ReviewJob, pr: dict[str, Any]) -> None:
+        key = draft_key(job.owner, job.repo, job.pr_number)
+        draft = self._drafts.get(key)
+        if draft is None:
+            self._reply(job, "There is no AI review draft waiting for approval on this PR. Comment `/ai-review` to create one.")
+            return
+        if draft.head_sha != pr["head"]["sha"]:
+            self._drafts.delete(key)
+            self._reply(
+                job,
+                f"The draft was for `{draft.head_sha[:7]}`, but the PR has new commits since. "
+                "Comment `/ai-review` to review the latest changes.",
+            )
+            return
+
+        body = f"{draft.body}\n\n---\n_Approved for publishing by @{job.requested_by}._"
+        self._github.create_review(
+            job.installation_id, job.owner, job.repo, job.pr_number, draft.head_sha, body, draft.comments
+        )
+        self._drafts.delete(key)
+        logger.info("Published approved draft delivery=%s by=%s", job.delivery_id, job.requested_by)
+
+    def _dismiss(self, job: ReviewJob) -> None:
+        self._drafts.delete(draft_key(job.owner, job.repo, job.pr_number))
+        self._reply(job, f"AI review draft dismissed by @{job.requested_by}.")
+        logger.info("Dismissed draft delivery=%s by=%s", job.delivery_id, job.requested_by)
+
+    def _reply(self, job: ReviewJob, text: str) -> None:
+        self._github.create_issue_comment(job.installation_id, job.owner, job.repo, job.pr_number, text)
+
+    def _load_conventions(self, job: ReviewJob, repo: RepoReader) -> ConventionIndex | None:
         """Build the RAG index; a failure here degrades the review instead of blocking it."""
         if self._embeddings is None:
             return None

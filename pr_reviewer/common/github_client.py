@@ -118,6 +118,11 @@ class GitHubAppClient:
             params={"sort": "created", "direction": "desc", "per_page": limit},
         ).json()
 
+    def create_issue_comment(self, installation_id: int, owner: str, repo: str, number: int, body: str) -> dict[str, Any]:
+        return self._request(
+            "POST", installation_id, f"/repos/{owner}/{repo}/issues/{number}/comments", json={"body": body}
+        ).json()
+
     def create_review(
         self,
         installation_id: int,

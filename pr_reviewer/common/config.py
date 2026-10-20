@@ -1,5 +1,7 @@
 """Service settings, loaded from environment variables or a local .env file."""
 
+from typing import Literal
+
 from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -29,6 +31,11 @@ class ReviewerSettings(QueueSettings):
     conventions_top_k: int = 6
     review_comments_limit: int = 100
     embedding_cache_ttl_seconds: int = 30 * 24 * 3600
+
+    # "auto" publishes reviews directly; "approval" posts a draft a maintainer must approve.
+    review_mode: Literal["auto", "approval"] = "auto"
+    max_findings: int = 15
+    draft_ttl_seconds: int = 7 * 24 * 3600
 
     @field_validator("github_private_key", mode="before")
     @classmethod
