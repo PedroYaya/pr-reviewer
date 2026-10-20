@@ -155,7 +155,11 @@ def main(argv: list[str] | None = None) -> int:
     agent = ReviewAgent(ChatOpenAI(model=settings.openai_model, temperature=settings.openai_temperature, api_key=settings.openai_api_key))
     # Shared in-memory cache: variants and repeats don't re-embed the same conventions.
     embeddings = CachedEmbeddings(
-        OpenAIEmbeddings(model=settings.openai_embedding_model, api_key=settings.openai_api_key),
+        OpenAIEmbeddings(
+            model=settings.openai_embedding_model,
+            api_key=settings.openai_api_key,
+            max_retries=settings.openai_max_retries,
+        ),
         InMemoryKeyValueStore(), settings.openai_embedding_model, ttl_seconds=0,
     )
     judge = None if args.no_judge else LLMJudge(

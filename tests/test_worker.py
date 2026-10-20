@@ -1,3 +1,7 @@
+import pytest
+import requests
+from prometheus_client import REGISTRY
+
 from pr_reviewer.common.models import ReviewJob
 from pr_reviewer.common.queue import InMemoryJobQueue
 from pr_reviewer.reviewer.agent import ReviewAgent
@@ -112,6 +116,7 @@ def test_run_survives_failed_job():
     worker.run()  # must return instead of raising
 
     assert github.reviews == []
+    assert [job.attempt for job in queue.scheduled] == [2]
 
 
 def test_reviews_with_conventions_from_repo_and_past_comments():
@@ -243,3 +248,84 @@ def test_command_review_uses_current_head():
     make_worker(github).process(make_job(head_sha=None))
 
     assert github.reviews[0]["commit_id"] == "latest"
+
+
+def http_error(status):
+    response = requests.Response()
+    response.status_code = status
+    return requests.HTTPError(f"{status}", response=response)
+
+
+def jobs_metric(outcome, kind="review"):
+    return REGISTRY.get_sample_value("prr_review_jobs_total", {"kind": kind, "outcome": outcome}) or 0.0
+
+
+def failing_worker(error, max_attempts=3):
+    queue = InMemoryJobQueue()
+    github = FakeGitHub()
+
+    def fail(*args):
+        raise error
+
+    github.get_pull_request = fail
+    worker = ReviewWorker(queue, github, ReviewAgent(ScriptedChatModel(responses=[])), max_attempts=max_attempts, retry_base_seconds=10)
+    return worker, queue
+
+
+def test_transient_failure_is_retried_with_backoff():
+    worker, queue = failing_worker(http_error(502))
+    before = jobs_metric("retry")
+
+    worker.handle(make_job().model_copy(update={"attempt": 2}))
+
+    [retry] = queue.scheduled
+    assert retry.attempt == 3
+    assert queue.dead == []
+    assert jobs_metric("retry") == before + 1
+
+
+def test_job_is_dead_lettered_after_last_attempt():
+    worker, queue = failing_worker(RuntimeError("boom"), max_attempts=2)
+
+    worker.handle(make_job().model_copy(update={"attempt": 2}))
+
+    assert queue.scheduled == []
+    [(job, error)] = queue.dead
+    assert (job.delivery_id, error) == ("d1", "RuntimeError: boom")
+
+
+@pytest.mark.parametrize("status", [404, 422])
+def test_client_errors_are_not_retried(status):
+    worker, queue = failing_worker(http_error(status))
+
+    worker.handle(make_job())
+
+    assert queue.scheduled == []
+    assert len(queue.dead) == 1
+
+
+def test_publish_with_unknown_outcome_is_not_retried():
+    # A timeout on POST /reviews may still have created the review; retrying could post it twice.
+    queue = InMemoryJobQueue()
+    github = FakeGitHub()
+
+    def timeout(*args):
+        raise requests.Timeout("read timed out")
+
+    github.create_review = timeout
+    worker = ReviewWorker(queue, github, ReviewAgent(ScriptedChatModel(responses=[submit()])))
+
+    worker.handle(make_job())
+
+    assert queue.scheduled == []
+    [(_, error)] = queue.dead
+    assert error.startswith("PublishError")
+
+
+def test_successful_review_is_counted():
+    before = jobs_metric("success")
+    worker = make_worker(FakeGitHub(), submit("ok", [finding(line=2)], tokens=(100, 20)))
+
+    worker.handle(make_job())
+
+    assert jobs_metric("success") == before + 1

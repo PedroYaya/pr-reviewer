@@ -15,7 +15,9 @@ from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 
+from pr_reviewer.common import metrics
 from pr_reviewer.common.config import ReviewerSettings
+from pr_reviewer.common.tracing import tracer
 from pr_reviewer.reviewer.budget import OmittedFile
 from pr_reviewer.reviewer.diff import number_patch
 from pr_reviewer.reviewer.repo_tools import RepoReader, make_repo_tools
@@ -117,6 +119,8 @@ class ReviewAgent:
             model=settings.openai_model,
             temperature=settings.openai_temperature,
             api_key=settings.openai_api_key,
+            max_retries=settings.openai_max_retries,
+            timeout=settings.openai_timeout_seconds,
         )
         return cls(llm, conventions_top_k=settings.conventions_top_k)
 
@@ -167,19 +171,28 @@ class ReviewAgent:
 
     @staticmethod
     def _invoke(model, messages: list[BaseMessage], run: ReviewRun) -> AIMessage:
-        response = model.invoke(messages)
-        messages.append(response)
-        run.llm_calls += 1
-        if usage := response.usage_metadata:
-            run.input_tokens += usage["input_tokens"]
-            run.output_tokens += usage["output_tokens"]
-        return response
+        with tracer.start_as_current_span("llm.invoke") as span:
+            response = model.invoke(messages)
+            messages.append(response)
+            run.llm_calls += 1
+            metrics.LLM_CALLS.inc()
+            if usage := response.usage_metadata:
+                run.input_tokens += usage["input_tokens"]
+                run.output_tokens += usage["output_tokens"]
+                metrics.LLM_TOKENS.labels(type="input").inc(usage["input_tokens"])
+                metrics.LLM_TOKENS.labels(type="output").inc(usage["output_tokens"])
+                span.set_attribute("llm.input_tokens", usage["input_tokens"])
+                span.set_attribute("llm.output_tokens", usage["output_tokens"])
+            span.set_attribute("llm.tool_calls", [c["name"] for c in response.tool_calls])
+            return response
 
     @staticmethod
     def _run_tool(tools: dict, call: dict) -> ToolMessage:
-        selected = tools.get(call["name"])
-        if selected is None:
-            content = f"Unknown tool '{call['name']}'"
-        else:
-            content = selected.invoke(call["args"])
-        return ToolMessage(content=content, tool_call_id=call["id"])
+        with tracer.start_as_current_span("agent.tool", attributes={"tool.name": call["name"]}):
+            metrics.TOOL_CALLS.inc()
+            selected = tools.get(call["name"])
+            if selected is None:
+                content = f"Unknown tool '{call['name']}'"
+            else:
+                content = selected.invoke(call["args"])
+            return ToolMessage(content=content, tool_call_id=call["id"])

@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 import pytest
+import requests
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
@@ -18,12 +19,16 @@ def private_key():
 
 
 class FakeResponse:
-    def __init__(self, data, text=""):
+    def __init__(self, data=None, text="", status_code=200, headers=None):
         self._data = data
         self.text = text
+        self.status_code = status_code
+        self.headers = headers or {}
+        self.url = "https://api.github.com/test"
 
     def raise_for_status(self):
-        pass
+        if self.status_code >= 400:
+            raise requests.HTTPError(f"{self.status_code}", response=self)
 
     def json(self):
         return self._data
@@ -132,3 +137,85 @@ def test_creates_issue_comment(private_key):
 
     method, url, kwargs = session.requests[0]
     assert (method, url.endswith("/repos/acme/repo/issues/7/comments"), kwargs["json"]) == ("POST", True, {"body": "hello"})
+
+
+class ScriptedSession:
+    """Session whose API responses (or exceptions) are played back in order."""
+
+    def __init__(self, outcomes):
+        self.outcomes = list(outcomes)
+        self.requests = []
+
+    def post(self, url, **kwargs):
+        expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
+        return FakeResponse({"token": "t", "expires_at": expires_at.isoformat()})
+
+    def request(self, method, url, **kwargs):
+        self.requests.append(method)
+        outcome = self.outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+
+def make_client(private_key, outcomes, sleeps):
+    session = ScriptedSession(outcomes)
+    return GitHubAppClient("123", private_key, session=session, attempts=3, sleep=sleeps.append), session
+
+
+def test_get_retries_server_errors_and_timeouts(private_key):
+    sleeps = []
+    client, session = make_client(
+        private_key, [FakeResponse(status_code=502), requests.Timeout("slow"), FakeResponse({"number": 7})], sleeps
+    )
+
+    assert client.get_pull_request(1, "acme", "repo", 7) == {"number": 7}
+    assert len(session.requests) == 3
+    assert len(sleeps) == 2
+
+
+def test_waits_for_retry_after_on_rate_limit(private_key):
+    sleeps = []
+    client, _ = make_client(
+        private_key, [FakeResponse(status_code=403, headers={"Retry-After": "7"}), FakeResponse({"id": 1})], sleeps
+    )
+
+    client.create_issue_comment(1, "acme", "repo", 7, "hi")  # POST is retried: the request was never processed
+
+    assert sleeps == [7.0]
+
+
+def test_does_not_retry_post_after_server_error(private_key):
+    sleeps = []
+    client, session = make_client(private_key, [FakeResponse(status_code=502)], sleeps)
+
+    with pytest.raises(requests.HTTPError):
+        client.create_review(1, "acme", "repo", 7, "abc", "body", [])
+    assert len(session.requests) == 1
+
+
+def test_does_not_retry_client_errors(private_key):
+    sleeps = []
+    client, session = make_client(private_key, [FakeResponse(status_code=404)], sleeps)
+
+    with pytest.raises(requests.HTTPError):
+        client.get_pull_request(1, "acme", "repo", 7)
+    assert len(session.requests) == 1
+
+
+def test_permission_403_is_not_a_rate_limit(private_key):
+    sleeps = []
+    client, session = make_client(private_key, [FakeResponse(status_code=403)], sleeps)
+
+    with pytest.raises(requests.HTTPError):
+        client.get_pull_request(1, "acme", "repo", 7)
+    assert len(session.requests) == 1
+
+
+def test_gives_up_after_max_attempts(private_key):
+    sleeps = []
+    client, session = make_client(private_key, [FakeResponse(status_code=503)] * 3, sleeps)
+
+    with pytest.raises(requests.HTTPError):
+        client.get_pull_request(1, "acme", "repo", 7)
+    assert len(session.requests) == 3

@@ -12,6 +12,9 @@ class QueueSettings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     review_queue_name: str = "pr-review-jobs"
     log_level: str = "INFO"
+    log_format: Literal["json", "text"] = "json"
+    # Tracing is off unless this is set, e.g. http://localhost:4318
+    otel_exporter_otlp_endpoint: str | None = None
 
 
 class GatewaySettings(QueueSettings):
@@ -25,6 +28,14 @@ class ReviewerSettings(QueueSettings):
     openai_model: str = "gpt-4o"
     openai_temperature: float = 0.2
     openai_embedding_model: str = "text-embedding-3-small"
+    # The OpenAI SDK retries 429, 5xx and connection errors with backoff, honouring Retry-After.
+    openai_max_retries: int = 4
+    openai_timeout_seconds: float = 120.0
+
+    github_max_attempts: int = 4
+    # A job that still fails is retried later (base * 4^n seconds), then dead-lettered.
+    job_max_attempts: int = 3
+    job_retry_base_seconds: float = 30.0
 
     diff_token_budget: int = 24_000
     file_token_budget: int = 6_000

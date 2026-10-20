@@ -43,6 +43,39 @@ Each review is stateless. No context is shared between PRs.
 
 Commands are only accepted from users whose association with the repo is `OWNER`, `MEMBER` or `COLLABORATOR`, and comments from bots are ignored. With `REVIEW_MODE=approval`, the bot doesn't publish anything on its own. It posts a draft comment with a table of findings, and the review is published only when a maintainer approves it. If new commits arrive after the draft was made, approving it is refused.
 
+## Reliability
+
+Retries happen at two levels.
+
+- **Per call.** The OpenAI SDK retries 429, 5xx and connection errors with exponential backoff and honours `Retry-After` (`OPENAI_MAX_RETRIES`, `OPENAI_TIMEOUT_SECONDS`). GitHub calls go through a tenacity policy (`common/retry.py`): rate limits (429, or 403 with `Retry-After` or `x-ratelimit-remaining: 0`) wait as long as GitHub asks, capped at 60 s, and are retried for any method, because GitHub never processed the request. Timeouts, connection errors and 5xx are retried with jittered backoff, but only for GETs. A POST that timed out may already have created the review.
+- **Per job.** If a job still fails, the worker puts it in a Redis sorted set (`<queue>:delayed`) to run again after 30 s, then 120 s (`JOB_RETRY_BASE_SECONDS × 4ⁿ`). After `JOB_MAX_ATTEMPTS` it goes to `<queue>:dead` along with the error. Failures a retry can't fix go straight to the dead-letter list: 4xx other than 408/409/429, such as a deleted PR or a 422 on the review. So does a timeout or 5xx while posting the review, so that it's never posted twice. Several workers can share the queue: `ZREM` makes sure only one of them takes each due retry.
+
+```bash
+redis-cli LRANGE pr-review-jobs:dead 0 -1   # each entry: {"job": …, "error": …, "failed_at": …}
+```
+
+To replay a dead job, push its `job` field back onto `pr-review-jobs`.
+
+## Observability
+
+- **Logs** are JSON lines (`LOG_FORMAT=json`, or `text` locally). Every line written while a webhook or job is handled carries `delivery_id`, `pr`, `kind` and `attempt`, plus `trace_id` and `span_id` when tracing is on.
+- **Metrics**: both services serve Prometheus metrics on `/metrics`.
+
+| Metric | What it answers |
+|---|---|
+| `prr_review_jobs_total{kind,outcome}` | Successful run rate: `success / (success + dead_letter)`. `retry` counts retried attempts and `skipped` counts stale commits or nothing to review |
+| `prr_review_job_duration_seconds`, `prr_queue_wait_seconds` | Time from push to review, and where it goes |
+| `prr_llm_tokens_total{type}`, `prr_llm_calls_total`, `prr_agent_tool_calls_total` | Token use and cost per review |
+| `prr_findings_total{severity}`, `prr_guardrail_dropped_findings_total{reason}`, `prr_secrets_redacted_total` | What the reviews contain and what the guardrails remove |
+| `prr_http_retries_total{service,reason}`, `prr_webhooks_total{event,outcome}` | GitHub rate limits and failures, and incoming traffic |
+
+```promql
+sum(rate(prr_review_jobs_total{outcome="success"}[1d]))
+  / sum(rate(prr_review_jobs_total{outcome=~"success|dead_letter"}[1d]))
+```
+
+- **Traces** (OpenTelemetry): set `OTEL_EXPORTER_OTLP_ENDPOINT` and install the `otel` extra. The gateway puts the W3C `traceparent` into each job, so one trace covers the webhook, the review job and its spans: `github.*`, `conventions.load`, `agent.review`, each `llm.invoke` (with token counts) and each `agent.tool`. Without an endpoint, the OpenTelemetry API is a no-op.
+
 ## Setup
 
 ```bash
@@ -62,6 +95,10 @@ cp env.example .env   # fill in GitHub App and OpenAI values
 | `CONVENTIONS_TOP_K` | reviewer | Convention snippets added to the prompt (default 6) |
 | `REVIEW_MODE` | reviewer | `auto` (default) or `approval` |
 | `MAX_FINDINGS` | reviewer | Cap on findings per review (default 15) |
+| `OPENAI_MAX_RETRIES`, `GITHUB_MAX_ATTEMPTS` | reviewer | Per-call retries (defaults 4 / 4) |
+| `JOB_MAX_ATTEMPTS`, `JOB_RETRY_BASE_SECONDS` | reviewer | Job-level retries before dead-lettering (defaults 3 / 30) |
+| `LOG_FORMAT` | both | `json` (default) or `text` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | both | Enables tracing, e.g. `http://localhost:4318` |
 
 ## Running locally
 
@@ -80,7 +117,7 @@ Set the GitHub App webhook URL to `https://<id>.ngrok-free.app/webhook`, then op
 pytest
 ```
 
-The tests use an in-memory queue and a fake LLM, so they need neither Redis nor OpenAI. They also check that every eval case's expected issue points at a line in its diff.
+The tests use an in-memory queue and a fake LLM, so they need neither Redis nor OpenAI. Retry tests use scripted HTTP responses and don't sleep, and tracing tests capture spans in memory. They also check that every eval case's expected issue points at a line in its diff.
 
 ## Evals
 
@@ -121,4 +158,5 @@ The App already exists in the organization. Org App admins manage these settings
 
 - **GitHub deliveries**: App settings → Advanced → Recent deliveries. A queued review returns `202`; an event that is ignored returns `200`; a bad signature returns `401`.
 - **ngrok inspector**: `http://127.0.0.1:4040`
-- **Logs**: each service logs the `delivery_id` from GitHub, so you can follow one webhook from the gateway through to the reviewer.
+- **Logs**: every log line carries the `delivery_id` from GitHub, so you can follow one webhook from the gateway through to the reviewer (`jq 'select(.delivery_id=="…")'`).
+- **Failed reviews**: check `prr_review_jobs_total{outcome="dead_letter"}` and the `pr-review-jobs:dead` list in Redis.

@@ -1,8 +1,9 @@
 """Messages exchanged between the gateway and reviewer services."""
 
+import time
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # "review" comes from PR events or a `/ai-review` comment; "approve" and
 # "dismiss" act on a draft review waiting for a maintainer.
@@ -20,3 +21,8 @@ class ReviewJob(BaseModel):
     action: str
     kind: JobKind = "review"
     requested_by: str | None = None
+    # Set by the queue's retry logic; 1 on the first try.
+    attempt: int = 1
+    enqueued_at: float = Field(default_factory=time.time)
+    # W3C trace context from the gateway, so the worker's spans join the webhook's trace.
+    trace_context: dict[str, str] = Field(default_factory=dict)

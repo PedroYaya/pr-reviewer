@@ -9,6 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from pr_reviewer.common.tracing import tracer
 from pr_reviewer.reviewer.agent import ReviewAgent, ReviewRun
 from pr_reviewer.reviewer.budget import DiffSelection, OmittedFile, TokenBudget, select_files
 from pr_reviewer.reviewer.guardrails import (
@@ -81,9 +82,16 @@ def run_review_pipeline(
     # Input guardrail: the LLM only ever sees redacted diffs and files.
     llm_files, secret_hits = redact_files(selection.files)
     safe_repo = RedactingRepoReader(repo)
-    conventions = load_conventions(safe_repo) if load_conventions and options.use_conventions else None
+    conventions = None
+    if load_conventions and options.use_conventions:
+        with tracer.start_as_current_span("conventions.load"):
+            conventions = load_conventions(safe_repo)
 
-    run = agent.review(title, description, llm_files, safe_repo, conventions=conventions, omitted=selection.omitted)
+    with tracer.start_as_current_span(
+        "agent.review", attributes={"review.files": len(llm_files), "review.omitted": len(selection.omitted)}
+    ) as span:
+        run = agent.review(title, description, llm_files, safe_repo, conventions=conventions, omitted=selection.omitted)
+        span.set_attribute("review.findings", len(run.result.findings))
 
     findings = secret_findings(secret_hits) + run.result.findings
     dropped: list[DroppedFinding] = []

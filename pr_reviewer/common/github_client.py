@@ -1,16 +1,20 @@
 """GitHub REST client that authenticates as a GitHub App installation."""
 
 import time
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import jwt
 import requests
 
+from pr_reviewer.common.retry import check_response, http_retrying
+
 API_URL = "https://api.github.com"
 FILES_PAGE_SIZE = 100
 # Refresh installation tokens slightly before GitHub expires them.
 TOKEN_EXPIRY_MARGIN = timedelta(minutes=1)
+DEFAULT_ATTEMPTS = 4
 
 
 class GitHubAppClient:
@@ -20,11 +24,15 @@ class GitHubAppClient:
         private_key: str,
         session: requests.Session | None = None,
         timeout: float = 10.0,
+        attempts: int = DEFAULT_ATTEMPTS,
+        sleep: Callable[[float], None] = time.sleep,
     ):
         self._app_id = app_id
         self._private_key = private_key
         self._session = session or requests.Session()
         self._timeout = timeout
+        self._attempts = attempts
+        self._sleep = sleep
         self._tokens: dict[int, tuple[str, datetime]] = {}
 
     def _app_jwt(self) -> str:
@@ -38,15 +46,18 @@ class GitHubAppClient:
         if cached and cached[1] - TOKEN_EXPIRY_MARGIN > datetime.now(timezone.utc):
             return cached[0]
 
-        response = self._session.post(
-            f"{API_URL}/app/installations/{installation_id}/access_tokens",
-            headers={
-                "Authorization": f"Bearer {self._app_jwt()}",
-                "Accept": "application/vnd.github+json",
-            },
-            timeout=self._timeout,
+        # Creating a token has no side effects, so it is retried like a GET.
+        response = self._send(
+            "GET",
+            lambda: self._session.post(
+                f"{API_URL}/app/installations/{installation_id}/access_tokens",
+                headers={
+                    "Authorization": f"Bearer {self._app_jwt()}",
+                    "Accept": "application/vnd.github+json",
+                },
+                timeout=self._timeout,
+            ),
         )
-        response.raise_for_status()
         data = response.json()
         expires_at = datetime.fromisoformat(data["expires_at"].replace("Z", "+00:00"))
         self._tokens[installation_id] = (data["token"], expires_at)
@@ -60,19 +71,27 @@ class GitHubAppClient:
         accept: str = "application/vnd.github+json",
         **kwargs: Any,
     ) -> requests.Response:
-        response = self._session.request(
+        return self._send(
             method,
-            f"{API_URL}{path}",
-            headers={
-                "Authorization": f"Bearer {self._installation_token(installation_id)}",
-                "Accept": accept,
-                "X-GitHub-Api-Version": "2022-11-28",
-            },
-            timeout=self._timeout,
-            **kwargs,
+            lambda: self._session.request(
+                method,
+                f"{API_URL}{path}",
+                headers={
+                    "Authorization": f"Bearer {self._installation_token(installation_id)}",
+                    "Accept": accept,
+                    "X-GitHub-Api-Version": "2022-11-28",
+                },
+                timeout=self._timeout,
+                **kwargs,
+            ),
         )
-        response.raise_for_status()
-        return response
+
+    def _send(self, method: str, send: Callable[[], requests.Response]) -> requests.Response:
+        """Send with retries for rate limits and transient failures (see common/retry.py)."""
+        for attempt in http_retrying("github", method, self._attempts, sleep=self._sleep):
+            with attempt:
+                return check_response(send(), method)
+        raise AssertionError("unreachable: tenacity reraises the last error")
 
     def get_pull_request(self, installation_id: int, owner: str, repo: str, number: int) -> dict[str, Any]:
         return self._request("GET", installation_id, f"/repos/{owner}/{repo}/pulls/{number}").json()
