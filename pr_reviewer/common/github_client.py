@@ -52,13 +52,20 @@ class GitHubAppClient:
         self._tokens[installation_id] = (data["token"], expires_at)
         return data["token"]
 
-    def _request(self, method: str, installation_id: int, path: str, **kwargs: Any) -> requests.Response:
+    def _request(
+        self,
+        method: str,
+        installation_id: int,
+        path: str,
+        accept: str = "application/vnd.github+json",
+        **kwargs: Any,
+    ) -> requests.Response:
         response = self._session.request(
             method,
             f"{API_URL}{path}",
             headers={
                 "Authorization": f"Bearer {self._installation_token(installation_id)}",
-                "Accept": "application/vnd.github+json",
+                "Accept": accept,
                 "X-GitHub-Api-Version": "2022-11-28",
             },
             timeout=self._timeout,
@@ -85,10 +92,36 @@ class GitHubAppClient:
                 return files
             page += 1
 
-    def create_issue_comment(self, installation_id: int, owner: str, repo: str, number: int, body: str) -> dict[str, Any]:
+    def get_file_content(self, installation_id: int, owner: str, repo: str, path: str, ref: str) -> str:
+        return self._request(
+            "GET",
+            installation_id,
+            f"/repos/{owner}/{repo}/contents/{path}",
+            accept="application/vnd.github.raw+json",
+            params={"ref": ref},
+        ).text
+
+    def list_directory(self, installation_id: int, owner: str, repo: str, path: str, ref: str) -> list[str]:
+        entries = self._request(
+            "GET", installation_id, f"/repos/{owner}/{repo}/contents/{path}", params={"ref": ref}
+        ).json()
+        if isinstance(entries, dict):  # path is a file, not a directory
+            return [entries["path"]]
+        return [f"{e['path']}/" if e["type"] == "dir" else e["path"] for e in entries]
+
+    def create_review(
+        self,
+        installation_id: int,
+        owner: str,
+        repo: str,
+        number: int,
+        commit_id: str,
+        body: str,
+        comments: list[dict[str, Any]],
+    ) -> dict[str, Any]:
         return self._request(
             "POST",
             installation_id,
-            f"/repos/{owner}/{repo}/issues/{number}/comments",
-            json={"body": body},
+            f"/repos/{owner}/{repo}/pulls/{number}/reviews",
+            json={"commit_id": commit_id, "event": "COMMENT", "body": body, "comments": comments},
         ).json()

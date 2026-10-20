@@ -13,7 +13,7 @@ from pr_reviewer.common.config import ReviewerSettings
 from pr_reviewer.common.github_client import GitHubAppClient
 from pr_reviewer.common.logging import configure_logging
 from pr_reviewer.common.queue import RedisJobQueue
-from pr_reviewer.reviewer.llm_reviewer import LLMReviewer
+from pr_reviewer.reviewer.agent import ReviewAgent
 from pr_reviewer.reviewer.worker import ReviewWorker
 
 
@@ -21,7 +21,7 @@ def build_worker(settings: ReviewerSettings) -> ReviewWorker:
     return ReviewWorker(
         queue=RedisJobQueue.from_url(settings.redis_url, settings.review_queue_name),
         github=GitHubAppClient(settings.github_app_id, settings.github_private_key.get_secret_value()),
-        reviewer=LLMReviewer.from_settings(settings),
+        agent=ReviewAgent.from_settings(settings),
     )
 
 

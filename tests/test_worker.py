@@ -1,18 +1,18 @@
-from langchain_core.language_models.fake_chat_models import FakeListChatModel
-
 from pr_reviewer.common.models import ReviewJob
 from pr_reviewer.common.queue import InMemoryJobQueue
-from pr_reviewer.reviewer.llm_reviewer import LLMReviewer, format_files_context
+from pr_reviewer.reviewer.agent import ReviewAgent
 from pr_reviewer.reviewer.worker import ReviewWorker
+from tests.fakes import ScriptedChatModel, finding, submit, tool_call
 
-FILES = [{"filename": "app.py", "status": "modified", "additions": 1, "deletions": 0, "patch": "+print('hi')"}]
+FILES = [{"filename": "app.py", "status": "modified", "additions": 1, "deletions": 0, "patch": "@@ -1,1 +1,2 @@\n a\n+print('hi')"}]
 
 
 class FakeGitHub:
     def __init__(self, head_sha="abc123", files=FILES):
         self.head_sha = head_sha
         self.files = files
-        self.comments = []
+        self.reviews = []
+        self.file_reads = []
 
     def get_pull_request(self, installation_id, owner, repo, number):
         return {"title": "Add greeting", "body": None, "head": {"sha": self.head_sha}}
@@ -20,8 +20,12 @@ class FakeGitHub:
     def list_pull_request_files(self, installation_id, owner, repo, number):
         return self.files
 
-    def create_issue_comment(self, installation_id, owner, repo, number, body):
-        self.comments.append(body)
+    def get_file_content(self, installation_id, owner, repo, path, ref):
+        self.file_reads.append((path, ref))
+        return "contents"
+
+    def create_review(self, installation_id, owner, repo, number, commit_id, body, comments):
+        self.reviews.append({"commit_id": commit_id, "body": body, "comments": comments})
         return {"id": 1}
 
 
@@ -32,46 +36,58 @@ def make_job(head_sha="abc123"):
     )
 
 
-def make_worker(github, responses=("Looks good",)):
-    reviewer = LLMReviewer(FakeListChatModel(responses=list(responses)))
-    return ReviewWorker(InMemoryJobQueue(), github, reviewer)
+def make_worker(github, *responses):
+    agent = ReviewAgent(ScriptedChatModel(responses=list(responses or [submit()])))
+    return ReviewWorker(InMemoryJobQueue(), github, agent)
 
 
-def test_posts_review_comment():
+def test_posts_review_with_inline_comments_on_head_commit():
     github = FakeGitHub()
-    make_worker(github).process(make_job())
+    make_worker(github, submit("Prints debug output.", [finding(line=2)])).process(make_job())
 
-    assert github.comments == ["Looks good"]
+    [review] = github.reviews
+    assert review["commit_id"] == "abc123"
+    assert "Prints debug output." in review["body"]
+    assert [c["line"] for c in review["comments"]] == [2]
+
+
+def test_agent_tools_read_files_at_head_commit():
+    github = FakeGitHub()
+    make_worker(github, tool_call("read_file", {"path": "util.py"}), submit()).process(make_job())
+
+    assert github.file_reads == [("util.py", "abc123")]
 
 
 def test_skips_job_for_outdated_commit():
     github = FakeGitHub(head_sha="newer")
     make_worker(github).process(make_job(head_sha="abc123"))
 
-    assert github.comments == []
+    assert github.reviews == []
 
 
 def test_skips_pull_request_without_files():
     github = FakeGitHub(files=[])
     make_worker(github).process(make_job())
 
-    assert github.comments == []
+    assert github.reviews == []
 
 
 def test_reviews_are_independent():
     # Regression: the old reviewer shared LangChain memory across every PR.
     github = FakeGitHub()
-    worker = make_worker(github, responses=("first", "second"))
+    model = ScriptedChatModel(responses=[submit("first"), submit("second")])
+    worker = ReviewWorker(InMemoryJobQueue(), github, ReviewAgent(model))
     worker.process(make_job())
     worker.process(make_job())
 
-    assert github.comments == ["first", "second"]
+    assert len(model.received[1]) == len(model.received[0])
+    assert "second" in github.reviews[1]["body"]
 
 
 def test_run_survives_failed_job():
     queue = InMemoryJobQueue()
     github = FakeGitHub()
-    worker = ReviewWorker(queue, github, LLMReviewer(FakeListChatModel(responses=["ok"])))
+    worker = ReviewWorker(queue, github, ReviewAgent(ScriptedChatModel(responses=[])))
 
     def failing_then_stop(*args):
         worker.stop()
@@ -81,11 +97,4 @@ def test_run_survives_failed_job():
     queue.enqueue(make_job())
     worker.run()  # must return instead of raising
 
-    assert github.comments == []
-
-
-def test_files_context_includes_patch():
-    context = format_files_context(FILES)
-
-    assert "**app.py** (modified)" in context
-    assert "+print('hi')" in context
+    assert github.reviews == []

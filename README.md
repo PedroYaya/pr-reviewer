@@ -8,14 +8,21 @@ An AI pull request reviewer delivered as a GitHub App. It runs as two Python mic
 GitHub ──webhook──▶ gateway (FastAPI) ──job──▶ Redis queue ──▶ reviewer (FastAPI + worker)
                     verify signature                            fetch PR files (GitHub API)
                     filter events                               review with LangChain + OpenAI
-                    respond 202 right away                      post comment on the PR
+                    respond 202 right away                      post review with inline comments
 ```
 
 - **gateway** (`pr_reviewer/gateway`): receives GitHub webhooks, checks the `X-Hub-Signature-256` HMAC, keeps only reviewable PR events (`opened`, `synchronize`, `reopened`, `ready_for_review`, never drafts) and queues a `ReviewJob`. GitHub stops waiting for a webhook after 10 seconds, so this service never calls the LLM.
-- **reviewer** (`pr_reviewer/reviewer`): a background worker takes jobs from the queue, skips any job whose commit is no longer the PR head, reviews the diff and posts the result. Its `/health` endpoint reports whether the worker is still running.
+- **reviewer** (`pr_reviewer/reviewer`): a background worker takes jobs from the queue, skips any job whose commit is no longer the PR head, runs the review agent and posts the result. Its `/health` endpoint reports whether the worker is still running.
 - **common** (`pr_reviewer/common`): settings, the GitHub App client (JWT, a cached token per installation, paginated file lists), the queue and the shared job model.
 
 Each review is stateless. No context is shared between PRs.
+
+### Review agent
+
+1. **Numbered diff** (`reviewer/diff.py`): each diff line in the prompt starts with its line number in the new file, so the model can point to exact lines.
+2. **Tool calling** (`reviewer/agent.py`, `reviewer/repo_tools.py`): the model can call `read_file` and `list_directory` to read the repository at the PR's head commit, for up to 5 rounds. Tool results are capped at 20k characters.
+3. **Structured output** (`reviewer/schemas.py`): the model finishes by calling the `ReviewResult` tool. OpenAI strict mode constrains its arguments to the schema, and Pydantic validates them: a summary plus findings with `path`, `line`, `severity`, `category`, `title`, `explanation` and `suggestion`. If the model uses up the tool rounds, `ReviewResult` is forced.
+4. **Publishing** (`reviewer/publisher.py`): findings become a GitHub pull request review, ordered by severity. Findings on lines that are in the diff become inline comments. Findings on other lines go in the review body, because a single invalid line makes GitHub reject the whole review with a 422.
 
 ## Setup
 

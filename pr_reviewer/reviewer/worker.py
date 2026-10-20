@@ -6,7 +6,9 @@ import threading
 from pr_reviewer.common.github_client import GitHubAppClient
 from pr_reviewer.common.models import ReviewJob
 from pr_reviewer.common.queue import JobQueue
-from pr_reviewer.reviewer.llm_reviewer import LLMReviewer
+from pr_reviewer.reviewer.agent import ReviewAgent
+from pr_reviewer.reviewer.publisher import build_review
+from pr_reviewer.reviewer.repo_tools import GitHubRepoReader
 
 logger = logging.getLogger(__name__)
 
@@ -16,10 +18,10 @@ QUEUE_ERROR_BACKOFF_SECONDS = 2
 
 
 class ReviewWorker:
-    def __init__(self, queue: JobQueue, github: GitHubAppClient, reviewer: LLMReviewer):
+    def __init__(self, queue: JobQueue, github: GitHubAppClient, agent: ReviewAgent):
         self._queue = queue
         self._github = github
-        self._reviewer = reviewer
+        self._agent = agent
         self._stop = threading.Event()
 
     def process(self, job: ReviewJob) -> None:
@@ -34,9 +36,16 @@ class ReviewWorker:
             logger.info("No changed files delivery=%s", job.delivery_id)
             return
 
-        review = self._reviewer.review(pr["title"], pr.get("body") or "", files)
-        self._github.create_issue_comment(job.installation_id, job.owner, job.repo, job.pr_number, review)
-        logger.info("Posted review delivery=%s pr=%s/%s#%s", job.delivery_id, job.owner, job.repo, job.pr_number)
+        repo = GitHubRepoReader(self._github, job.installation_id, job.owner, job.repo, job.head_sha)
+        result = self._agent.review(pr["title"], pr.get("body") or "", files, repo)
+        body, comments = build_review(result, files)
+        self._github.create_review(
+            job.installation_id, job.owner, job.repo, job.pr_number, job.head_sha, body, comments
+        )
+        logger.info(
+            "Posted review delivery=%s pr=%s/%s#%s findings=%d inline=%d",
+            job.delivery_id, job.owner, job.repo, job.pr_number, len(result.findings), len(comments),
+        )
 
     def run(self) -> None:
         while not self._stop.is_set():

@@ -18,8 +18,9 @@ def private_key():
 
 
 class FakeResponse:
-    def __init__(self, data):
+    def __init__(self, data, text=""):
         self._data = data
+        self.text = text
 
     def raise_for_status(self):
         pass
@@ -43,7 +44,7 @@ class FakeSession:
     def request(self, method, url, **kwargs):
         self.requests.append((method, url, kwargs))
         page = kwargs.get("params", {}).get("page", 1)
-        return FakeResponse(self.pages[page - 1])
+        return FakeResponse(self.pages[page - 1], text="raw file")
 
 
 def test_caches_token_per_installation(private_key):
@@ -78,3 +79,36 @@ def test_lists_files_across_pages(private_key):
 
     assert len(files) == FILES_PAGE_SIZE + 1
     assert files[-1]["filename"] == "last.py"
+
+
+def test_reads_raw_file_at_ref(private_key):
+    session = FakeSession()
+    client = GitHubAppClient("123", private_key, session=session)
+
+    content = client.get_file_content(1, "acme", "repo", "src/app.py", "abc123")
+
+    method, url, kwargs = session.requests[0]
+    assert content == "raw file"
+    assert url.endswith("/repos/acme/repo/contents/src/app.py")
+    assert kwargs["params"] == {"ref": "abc123"}
+    assert kwargs["headers"]["Accept"] == "application/vnd.github.raw+json"
+
+
+def test_lists_directory_marking_subdirectories(private_key):
+    entries = [{"path": "src", "type": "dir"}, {"path": "README.md", "type": "file"}]
+    session = FakeSession(pages=[entries])
+    client = GitHubAppClient("123", private_key, session=session)
+
+    assert client.list_directory(1, "acme", "repo", "", "abc123") == ["src/", "README.md"]
+
+
+def test_creates_comment_review_on_commit(private_key):
+    session = FakeSession(pages=[{"id": 9}])
+    client = GitHubAppClient("123", private_key, session=session)
+    comments = [{"path": "app.py", "line": 2, "side": "RIGHT", "body": "fix"}]
+
+    client.create_review(1, "acme", "repo", 7, "abc123", "Summary", comments)
+
+    method, url, kwargs = session.requests[0]
+    assert (method, url.endswith("/repos/acme/repo/pulls/7/reviews")) == ("POST", True)
+    assert kwargs["json"] == {"commit_id": "abc123", "event": "COMMENT", "body": "Summary", "comments": comments}
