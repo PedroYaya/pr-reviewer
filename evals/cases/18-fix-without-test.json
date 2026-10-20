@@ -1,0 +1,41 @@
+{
+  "id": "fix-without-test",
+  "title": "Fix: Sunday not detected as weekend",
+  "tags": [
+    "rag",
+    "testing"
+  ],
+  "description": "weekday() is 6 for Sunday, which the old check missed.",
+  "files": [
+    {
+      "filename": "app/dates.py",
+      "additions": 1,
+      "deletions": 1,
+      "patch": [
+        "@@ -3,3 +3,3 @@ from datetime import date",
+        "",
+        " def is_weekend(day: date) -> bool:",
+        "-    return day.weekday() > 5",
+        "+    return day.weekday() >= 5"
+      ]
+    }
+  ],
+  "conventions": [
+    {
+      "source": "CONTRIBUTING.md",
+      "text": "## Tests\nEvery bug fix must include a regression test that fails without the fix."
+    }
+  ],
+  "expected": [
+    {
+      "id": "missing-regression-test",
+      "path": "app/dates.py",
+      "lines": [
+        5,
+        5
+      ],
+      "category": "testing",
+      "description": "Bug fix without a regression test, which the team's contributing guide requires."
+    }
+  ]
+}

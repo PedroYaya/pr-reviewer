@@ -10,15 +10,10 @@ from pr_reviewer.common.github_client import GitHubAppClient
 from pr_reviewer.common.models import ReviewJob
 from pr_reviewer.common.queue import JobQueue
 from pr_reviewer.reviewer.agent import ReviewAgent
-from pr_reviewer.reviewer.budget import TokenBudget, select_files
+from pr_reviewer.reviewer.budget import TokenBudget
 from pr_reviewer.reviewer.conventions import guideline_documents, review_comment_documents
 from pr_reviewer.reviewer.drafts import DraftStore, InMemoryDraftStore, ReviewDraft, draft_key
-from pr_reviewer.reviewer.guardrails import (
-    RedactingRepoReader,
-    apply_output_guardrails,
-    redact_files,
-    secret_findings,
-)
+from pr_reviewer.reviewer.pipeline import PipelineOptions, run_review_pipeline
 from pr_reviewer.reviewer.publisher import build_draft_comment, build_review
 from pr_reviewer.reviewer.repo_tools import GitHubRepoReader, RepoReader
 from pr_reviewer.reviewer.retrieval import ConventionIndex
@@ -52,10 +47,9 @@ class ReviewWorker:
         self._github = github
         self._agent = agent
         self._embeddings = embeddings
-        self._budget = budget
         self._review_comments_limit = review_comments_limit
         self._review_mode = review_mode
-        self._max_findings = max_findings
+        self._options = PipelineOptions(budget=budget, max_findings=max_findings)
         self._drafts = drafts if drafts is not None else InMemoryDraftStore()
         self._stop = threading.Event()
 
@@ -76,25 +70,21 @@ class ReviewWorker:
             return
 
         files = self._github.list_pull_request_files(job.installation_id, job.owner, job.repo, job.pr_number)
-        selection = select_files(files, self._budget)
-        if not selection.files:
-            logger.info("Nothing reviewable delivery=%s omitted=%d", job.delivery_id, len(selection.omitted))
+        repo = GitHubRepoReader(self._github, job.installation_id, job.owner, job.repo, head_sha)
+        output = run_review_pipeline(
+            self._agent,
+            pr["title"],
+            pr.get("body") or "",
+            files,
+            repo,
+            self._options,
+            load_conventions=lambda safe_repo: self._load_conventions(job, safe_repo),
+        )
+        if output is None:
+            logger.info("Nothing reviewable delivery=%s files=%d", job.delivery_id, len(files))
             return
 
-        # Input guardrail: the LLM only ever sees redacted diffs and files.
-        llm_files, secret_hits = redact_files(selection.files)
-        repo = RedactingRepoReader(GitHubRepoReader(self._github, job.installation_id, job.owner, job.repo, head_sha))
-        conventions = self._load_conventions(job, repo)
-        run = self._agent.review(
-            pr["title"], pr.get("body") or "", llm_files, repo, conventions=conventions, omitted=selection.omitted
-        )
-
-        findings, dropped = apply_output_guardrails(
-            secret_findings(secret_hits) + run.result.findings, llm_files, self._max_findings
-        )
-        result = run.result.model_copy(update={"findings": findings})
-        body, comments = build_review(result, llm_files, selection.omitted)
-
+        body, comments = build_review(output.result, output.files, output.omitted)
         if self._review_mode == "approval":
             self._drafts.save(
                 draft_key(job.owner, job.repo, job.pr_number),
@@ -102,22 +92,23 @@ class ReviewWorker:
             )
             self._github.create_issue_comment(
                 job.installation_id, job.owner, job.repo, job.pr_number,
-                build_draft_comment(result, comments, head_sha),
+                build_draft_comment(output.result, comments, head_sha),
             )
         else:
             self._github.create_review(
                 job.installation_id, job.owner, job.repo, job.pr_number, head_sha, body, comments
             )
 
+        run = output.run
         logger.info(
             "Review %s delivery=%s pr=%s/%s#%s findings=%d inline=%d dropped=%d secrets=%d omitted=%d "
             "input_tokens=%d output_tokens=%d llm_calls=%d tool_calls=%d",
             "drafted" if self._review_mode == "approval" else "posted",
-            job.delivery_id, job.owner, job.repo, job.pr_number, len(findings), len(comments), len(dropped),
-            len(secret_hits), len(selection.omitted), run.input_tokens, run.output_tokens, run.llm_calls,
-            run.tool_calls,
+            job.delivery_id, job.owner, job.repo, job.pr_number, len(output.result.findings), len(comments),
+            len(output.dropped), len(output.secret_hits), len(output.omitted), run.input_tokens,
+            run.output_tokens, run.llm_calls, run.tool_calls,
         )
-        for item in dropped:
+        for item in output.dropped:
             logger.info(
                 "Guardrail dropped finding delivery=%s reason=%s location=%s:%s",
                 job.delivery_id, item.reason, item.finding.path, item.finding.line,

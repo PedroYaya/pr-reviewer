@@ -1,0 +1,47 @@
+{
+  "id": "missing-await",
+  "title": "Send order confirmation email",
+  "tags": [
+    "bug",
+    "typescript"
+  ],
+  "description": "Customers should get an email when an order is created. Email failures must not fail the request.",
+  "files": [
+    {
+      "filename": "src/api/orders.ts",
+      "additions": 6,
+      "deletions": 1,
+      "patch": [
+        "@@ -12,3 +12,8 @@ export async function createOrder(req: Request, res: Response) {",
+        "   const order = await db.orders.insert(req.body);",
+        "-  res.status(201).json(order);",
+        "+  try {",
+        "+    sendConfirmationEmail(order.customerEmail, order.id);",
+        "+  } catch (err) {",
+        "+    logger.error(\"Failed to send confirmation\", err);",
+        "+  }",
+        "+  res.status(201).json(order);",
+        " }"
+      ]
+    }
+  ],
+  "repo_files": {
+    "src/email.ts": [
+      "export async function sendConfirmationEmail(to: string, orderId: string): Promise<void> {",
+      "  await mailer.send({ to, template: \"order-confirmation\", data: { orderId } });",
+      "}"
+    ]
+  },
+  "expected": [
+    {
+      "id": "unawaited-promise",
+      "path": "src/api/orders.ts",
+      "lines": [
+        13,
+        16
+      ],
+      "category": "bug",
+      "description": "sendConfirmationEmail is async and not awaited, so the try/catch never sees its rejection (unhandled promise rejection)."
+    }
+  ]
+}

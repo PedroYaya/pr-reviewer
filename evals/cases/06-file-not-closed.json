@@ -1,0 +1,39 @@
+{
+  "id": "file-not-closed",
+  "title": "Export rows to CSV",
+  "tags": [
+    "bug",
+    "python"
+  ],
+  "files": [
+    {
+      "filename": "app/export.py",
+      "status": "added",
+      "additions": 9,
+      "patch": [
+        "@@ -0,0 +1,9 @@",
+        "+import csv",
+        "+",
+        "+",
+        "+def export_rows(path, rows):",
+        "+    f = open(path, \"w\", newline=\"\")",
+        "+    writer = csv.writer(f)",
+        "+    for row in rows:",
+        "+        writer.writerow(row)",
+        "+    return len(rows)"
+      ]
+    }
+  ],
+  "expected": [
+    {
+      "id": "unclosed-file",
+      "path": "app/export.py",
+      "lines": [
+        5,
+        9
+      ],
+      "category": "bug",
+      "description": "The file is never closed, so data may not be flushed and the handle leaks; use a with block."
+    }
+  ]
+}

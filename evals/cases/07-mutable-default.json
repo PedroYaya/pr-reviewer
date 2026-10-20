@@ -1,0 +1,37 @@
+{
+  "id": "mutable-default",
+  "title": "Add shopping cart",
+  "tags": [
+    "bug",
+    "python"
+  ],
+  "files": [
+    {
+      "filename": "app/cart.py",
+      "status": "added",
+      "additions": 7,
+      "patch": [
+        "@@ -0,0 +1,7 @@",
+        "+class Cart:",
+        "+    def __init__(self, items=[]):",
+        "+        self.items = items",
+        "+",
+        "+    def add(self, item):",
+        "+        self.items.append(item)",
+        "+        return self"
+      ]
+    }
+  ],
+  "expected": [
+    {
+      "id": "shared-default",
+      "path": "app/cart.py",
+      "lines": [
+        2,
+        3
+      ],
+      "category": "bug",
+      "description": "Mutable default argument: every Cart created without items shares the same list."
+    }
+  ]
+}

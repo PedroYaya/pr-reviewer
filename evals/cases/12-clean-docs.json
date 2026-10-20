@@ -1,0 +1,26 @@
+{
+  "id": "clean-docs",
+  "title": "Document the dev server port",
+  "tags": [
+    "clean"
+  ],
+  "files": [
+    {
+      "filename": "README.md",
+      "additions": 5,
+      "deletions": 1,
+      "patch": [
+        "@@ -8,3 +8,7 @@ pip install -e .",
+        "",
+        " ## Usage",
+        "",
+        "-Run `app serve`.",
+        "+Start the development server:",
+        "+",
+        "+```bash",
+        "+app serve --port 8000",
+        "+```"
+      ]
+    }
+  ]
+}

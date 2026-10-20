@@ -1,0 +1,48 @@
+{
+  "id": "naive-aware-datetime",
+  "title": "Store token expiry as datetime",
+  "tags": [
+    "bug",
+    "python"
+  ],
+  "files": [
+    {
+      "filename": "app/tokens.py",
+      "additions": 8,
+      "deletions": 4,
+      "patch": [
+        "@@ -1,10 +1,14 @@",
+        "-import time",
+        "+from datetime import datetime, timezone",
+        "",
+        "",
+        " class TokenCache:",
+        "     def __init__(self):",
+        "         self._token = None",
+        "-        self._expires_at = 0",
+        "+        self._expires_at = None",
+        "",
+        "-    def valid(self):",
+        "-        return self._token is not None and time.time() < self._expires_at",
+        "+    def store(self, token, expires_at_iso):",
+        "+        self._token = token",
+        "+        self._expires_at = datetime.fromisoformat(expires_at_iso.replace(\"Z\", \"+00:00\"))",
+        "+",
+        "+    def valid(self):",
+        "+        return self._token is not None and datetime.utcnow() < self._expires_at"
+      ]
+    }
+  ],
+  "expected": [
+    {
+      "id": "naive-vs-aware",
+      "path": "app/tokens.py",
+      "lines": [
+        14,
+        14
+      ],
+      "category": "bug",
+      "description": "datetime.utcnow() is naive while _expires_at is timezone-aware; comparing them raises TypeError."
+    }
+  ]
+}

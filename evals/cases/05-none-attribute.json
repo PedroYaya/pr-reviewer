@@ -1,0 +1,37 @@
+{
+  "id": "none-attribute",
+  "title": "Handle customer.updated webhook",
+  "tags": [
+    "bug",
+    "python"
+  ],
+  "files": [
+    {
+      "filename": "app/webhooks.py",
+      "additions": 5,
+      "patch": [
+        "@@ -20,3 +20,8 @@ def handle_event(payload):",
+        "     event_type = payload[\"type\"]",
+        "     if event_type == \"invoice.paid\":",
+        "         mark_paid(payload[\"data\"][\"invoice_id\"])",
+        "+    elif event_type == \"customer.updated\":",
+        "+        customer = payload[\"data\"][\"customer\"]",
+        "+        email = customer.get(\"email\")",
+        "+        send_welcome(email.lower())",
+        "+    return {\"ok\": True}"
+      ]
+    }
+  ],
+  "expected": [
+    {
+      "id": "email-none",
+      "path": "app/webhooks.py",
+      "lines": [
+        25,
+        26
+      ],
+      "category": "bug",
+      "description": "customer.get('email') can return None, and email.lower() then raises AttributeError."
+    }
+  ]
+}

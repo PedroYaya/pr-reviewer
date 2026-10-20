@@ -1,0 +1,37 @@
+{
+  "id": "clean-tests",
+  "title": "Add pagination tests",
+  "tags": [
+    "clean"
+  ],
+  "files": [
+    {
+      "filename": "tests/test_pagination.py",
+      "status": "added",
+      "additions": 12,
+      "patch": [
+        "@@ -0,0 +1,12 @@",
+        "+import pytest",
+        "+",
+        "+from app.pagination import paginate",
+        "+",
+        "+",
+        "+@pytest.mark.parametrize(\"page, expected\", [(1, [1, 2]), (2, [3, 4]), (3, [5])])",
+        "+def test_paginate_returns_requested_page(page, expected):",
+        "+    assert paginate([1, 2, 3, 4, 5], page, page_size=2) == expected",
+        "+",
+        "+",
+        "+def test_paginate_past_the_end_is_empty():",
+        "+    assert paginate([1, 2, 3], 5, page_size=2) == []"
+      ]
+    }
+  ],
+  "repo_files": {
+    "app/pagination.py": [
+      "def paginate(items, page, page_size):",
+      "    \"\"\"Return the 1-indexed page of items.\"\"\"",
+      "    start = (page - 1) * page_size",
+      "    return items[start:start + page_size]"
+    ]
+  }
+}

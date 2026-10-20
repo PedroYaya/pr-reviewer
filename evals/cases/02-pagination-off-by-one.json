@@ -1,0 +1,50 @@
+{
+  "id": "pagination-off-by-one",
+  "title": "Add pagination helpers",
+  "tags": [
+    "bug",
+    "python"
+  ],
+  "description": "Pages are 1-indexed in the API.",
+  "files": [
+    {
+      "filename": "app/pagination.py",
+      "status": "added",
+      "additions": 9,
+      "patch": [
+        "@@ -0,0 +1,9 @@",
+        "+def paginate(items, page, page_size):",
+        "+    \"\"\"Return the 1-indexed page of items.\"\"\"",
+        "+    start = page * page_size",
+        "+    end = start + page_size",
+        "+    return items[start:end]",
+        "+",
+        "+",
+        "+def page_count(total, page_size):",
+        "+    return total // page_size"
+      ]
+    }
+  ],
+  "expected": [
+    {
+      "id": "start-index",
+      "path": "app/pagination.py",
+      "lines": [
+        3,
+        3
+      ],
+      "category": "bug",
+      "description": "Pages are 1-indexed, so start must be (page - 1) * page_size; page 1 currently skips the first page."
+    },
+    {
+      "id": "page-count-floor",
+      "path": "app/pagination.py",
+      "lines": [
+        9,
+        9
+      ],
+      "category": "bug",
+      "description": "Floor division drops the last partial page; use ceiling division."
+    }
+  ]
+}

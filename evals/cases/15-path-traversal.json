@@ -1,0 +1,38 @@
+{
+  "id": "path-traversal",
+  "title": "Serve uploaded files",
+  "tags": [
+    "security",
+    "python"
+  ],
+  "files": [
+    {
+      "filename": "app/files.py",
+      "additions": 6,
+      "patch": [
+        "@@ -1,3 +1,9 @@",
+        " from pathlib import Path",
+        "",
+        " UPLOAD_DIR = Path(\"/srv/uploads\")",
+        "+",
+        "+",
+        "+def read_upload(filename: str) -> bytes:",
+        "+    \"\"\"Return the contents of a file a user uploaded earlier.\"\"\"",
+        "+    path = UPLOAD_DIR / filename",
+        "+    return path.read_bytes()"
+      ]
+    }
+  ],
+  "expected": [
+    {
+      "id": "traversal",
+      "path": "app/files.py",
+      "lines": [
+        8,
+        9
+      ],
+      "category": "security",
+      "description": "A user-supplied filename like ../../etc/passwd escapes UPLOAD_DIR (path traversal); resolve and check the path."
+    }
+  ]
+}

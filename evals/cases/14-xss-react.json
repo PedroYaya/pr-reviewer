@@ -1,0 +1,41 @@
+{
+  "id": "xss-react",
+  "title": "Render user comments",
+  "tags": [
+    "security",
+    "typescript"
+  ],
+  "description": "Comment bodies come straight from users.",
+  "files": [
+    {
+      "filename": "src/components/Comment.tsx",
+      "status": "added",
+      "additions": 10,
+      "patch": [
+        "@@ -0,0 +1,10 @@",
+        "+type Props = { author: string; body: string };",
+        "+",
+        "+export function Comment({ author, body }: Props) {",
+        "+  return (",
+        "+    <div className=\"comment\">",
+        "+      <strong>{author}</strong>",
+        "+      <div dangerouslySetInnerHTML={{ __html: body }} />",
+        "+    </div>",
+        "+  );",
+        "+}"
+      ]
+    }
+  ],
+  "expected": [
+    {
+      "id": "xss",
+      "path": "src/components/Comment.tsx",
+      "lines": [
+        7,
+        7
+      ],
+      "category": "security",
+      "description": "User-controlled HTML is rendered with dangerouslySetInnerHTML: stored XSS."
+    }
+  ]
+}

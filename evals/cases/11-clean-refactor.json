@@ -1,0 +1,62 @@
+{
+  "id": "clean-refactor",
+  "title": "Rename slug to slugify and precompile regex",
+  "tags": [
+    "clean"
+  ],
+  "files": [
+    {
+      "filename": "app/strings.py",
+      "additions": 4,
+      "deletions": 3,
+      "patch": [
+        "@@ -1,6 +1,7 @@",
+        "+import re",
+        "+",
+        "+_NON_ALNUM = re.compile(r\"[^a-z0-9]+\")",
+        "",
+        "",
+        "-def slug(text):",
+        "+def slugify(text: str) -> str:",
+        "     \"\"\"Lowercase text and replace runs of non-alphanumerics with hyphens.\"\"\"",
+        "-    import re",
+        "-    return re.sub(r\"[^a-z0-9]+\", \"-\", text.lower()).strip(\"-\")",
+        "+    return _NON_ALNUM.sub(\"-\", text.lower()).strip(\"-\")"
+      ]
+    },
+    {
+      "filename": "app/views.py",
+      "additions": 2,
+      "deletions": 2,
+      "patch": [
+        "@@ -1,5 +1,5 @@",
+        "-from app.strings import slug",
+        "+from app.strings import slugify",
+        "",
+        "",
+        " def article_url(article):",
+        "-    return f\"/articles/{slug(article.title)}\"",
+        "+    return f\"/articles/{slugify(article.title)}\""
+      ]
+    }
+  ],
+  "repo_files": {
+    "app/strings.py": [
+      "import re",
+      "",
+      "_NON_ALNUM = re.compile(r\"[^a-z0-9]+\")",
+      "",
+      "",
+      "def slugify(text: str) -> str:",
+      "    \"\"\"Lowercase text and replace runs of non-alphanumerics with hyphens.\"\"\"",
+      "    return _NON_ALNUM.sub(\"-\", text.lower()).strip(\"-\")"
+    ],
+    "app/views.py": [
+      "from app.strings import slugify",
+      "",
+      "",
+      "def article_url(article):",
+      "    return f\"/articles/{slugify(article.title)}\""
+    ]
+  }
+}

@@ -80,7 +80,33 @@ Set the GitHub App webhook URL to `https://<id>.ngrok-free.app/webhook`, then op
 pytest
 ```
 
-The tests use an in-memory queue and a fake LLM, so they need neither Redis nor OpenAI.
+The tests use an in-memory queue and a fake LLM, so they need neither Redis nor OpenAI. They also check that every eval case's expected issue points at a line in its diff.
+
+## Evals
+
+> **Note:** this public repository is a sanitized copy. The production deployment, including its credentials, the real GitHub App installation and its eval results, lives in a private company repository. Here the evals run only against the mocked LLM in the test suite (`tests/test_evals.py`), and `evals/results/` is empty.
+
+`evals/cases/` holds 20 fixed pull requests. 17 have seeded issues (SQL injection, XSS, path traversal, an unawaited promise, an N+1 query, a committed secret, a prompt injection, convention violations that only RAG can catch, …) and 3 are clean, to measure false positives. Each case lists the expected issues with file, line range and category.
+
+```bash
+python -m pr_reviewer.evals.run                       # full pipeline vs baseline, with LLM judge
+python -m pr_reviewer.evals.run --variant full --no-judge --case sql-injection
+python -m pr_reviewer.evals.run --repeat 3            # average out sampling noise
+```
+
+The suite runs the same `run_review_pipeline` as the worker, with no GitHub access. It compares two variants:
+
+- **full**: the token budget, RAG, guardrails and finding cap.
+- **baseline**: every diff in full, no RAG, no output filtering. This is close to the original single-prompt reviewer.
+
+| Metric | How it is measured |
+|---|---|
+| Useful findings | An LLM judge (`evals/judge`, temperature 0, strict structured output) rates each finding as correct, specific and actionable, or not |
+| Expected issues found | Location: same file, within ±2 lines. Judge: the finding identifies the issue by meaning |
+| Findings on clean PRs | False positives |
+| Avg tokens, LLM calls, tool calls, seconds | Taken from OpenAI usage metadata for each case |
+
+Results are written to `evals/results/<timestamp>.json`, with every finding and the judge's reasoning. `--fail-under-useful 0.7` and `--fail-under-recall 0.8` make the command exit non-zero below those thresholds, for CI.
 
 ## GitHub App configuration
 

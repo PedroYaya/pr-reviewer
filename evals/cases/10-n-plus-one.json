@@ -1,0 +1,39 @@
+{
+  "id": "n-plus-one",
+  "title": "Report of orders with customer names",
+  "tags": [
+    "performance",
+    "python"
+  ],
+  "files": [
+    {
+      "filename": "app/reports.py",
+      "status": "added",
+      "additions": 9,
+      "patch": [
+        "@@ -0,0 +1,9 @@",
+        "+from app.models import Customer, Order",
+        "+",
+        "+",
+        "+def orders_with_customers(session):",
+        "+    rows = []",
+        "+    for order in session.query(Order).all():",
+        "+        customer = session.query(Customer).get(order.customer_id)",
+        "+        rows.append({\"order\": order.id, \"customer\": customer.name})",
+        "+    return rows"
+      ]
+    }
+  ],
+  "expected": [
+    {
+      "id": "n-plus-one",
+      "path": "app/reports.py",
+      "lines": [
+        6,
+        7
+      ],
+      "category": "performance",
+      "description": "One query per order to load its customer (N+1); join or eager-load customers."
+    }
+  ]
+}

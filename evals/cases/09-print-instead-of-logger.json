@@ -1,0 +1,42 @@
+{
+  "id": "print-instead-of-logger",
+  "title": "Debug failed charges",
+  "tags": [
+    "rag",
+    "python"
+  ],
+  "files": [
+    {
+      "filename": "app/billing.py",
+      "additions": 2,
+      "patch": [
+        "@@ -14,4 +14,6 @@ def charge(customer_id, amount_cents):",
+        "     if amount_cents <= 0:",
+        "         raise ValueError(\"amount must be positive\")",
+        "+    print(f\"charging {customer_id} {amount_cents}\")",
+        "     result = gateway.charge(customer_id, amount_cents)",
+        "+    print(\"charge result\", result)",
+        "     return result"
+      ]
+    }
+  ],
+  "conventions": [
+    {
+      "kind": "past_review",
+      "source": "https://github.com/acme/shop/pull/412#discussion_r1",
+      "text": "Reviewer comment on app/payments.py:\nPlease don't use print() for diagnostics. We ship logs through the structured logger (logger.info with extra=...) and print output is lost in production.\n\nCode:\n+    print(f\"refund {refund_id}\")"
+    }
+  ],
+  "expected": [
+    {
+      "id": "use-logger",
+      "path": "app/billing.py",
+      "lines": [
+        16,
+        18
+      ],
+      "category": "maintainability",
+      "description": "print() is used for diagnostics instead of the structured logger the team requires (and it may leak payment details)."
+    }
+  ]
+}

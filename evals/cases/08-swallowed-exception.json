@@ -1,0 +1,47 @@
+{
+  "id": "swallowed-exception",
+  "title": "Make inventory sync resilient",
+  "tags": [
+    "rag",
+    "python"
+  ],
+  "description": "The nightly sync crashed when the supplier API was down.",
+  "files": [
+    {
+      "filename": "app/sync.py",
+      "additions": 6,
+      "deletions": 2,
+      "patch": [
+        "@@ -5,4 +5,8 @@ logger = logging.getLogger(__name__)",
+        "",
+        " def sync_inventory(client, store):",
+        "-    items = client.fetch_items()",
+        "-    store.save_all(items)",
+        "+    try:",
+        "+        items = client.fetch_items()",
+        "+        store.save_all(items)",
+        "+    except Exception:",
+        "+        pass",
+        "+    return True"
+      ]
+    }
+  ],
+  "conventions": [
+    {
+      "source": "CONTRIBUTING.md",
+      "text": "## Error handling\nNever swallow exceptions. Catch the narrowest exception type you can handle, log it with logger.exception, and either re-raise or return an explicit error result."
+    }
+  ],
+  "expected": [
+    {
+      "id": "swallow",
+      "path": "app/sync.py",
+      "lines": [
+        10,
+        12
+      ],
+      "category": "bug",
+      "description": "All exceptions are silently swallowed and the function still returns True, hiding failed syncs; this breaks the team's error-handling rule."
+    }
+  ]
+}
