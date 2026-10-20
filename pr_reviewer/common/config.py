@@ -1,0 +1,30 @@
+"""Service settings, loaded from environment variables or a local .env file."""
+
+from pydantic import SecretStr, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class QueueSettings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    redis_url: str = "redis://localhost:6379/0"
+    review_queue_name: str = "pr-review-jobs"
+    log_level: str = "INFO"
+
+
+class GatewaySettings(QueueSettings):
+    github_webhook_secret: SecretStr
+
+
+class ReviewerSettings(QueueSettings):
+    github_app_id: str
+    github_private_key: SecretStr
+    openai_api_key: SecretStr
+    openai_model: str = "gpt-4o"
+    openai_temperature: float = 0.2
+
+    @field_validator("github_private_key", mode="before")
+    @classmethod
+    def _unescape_newlines(cls, value: str) -> str:
+        # .env files usually store the PEM key on one line with literal "\n".
+        return value.replace("\\n", "\n") if isinstance(value, str) else value

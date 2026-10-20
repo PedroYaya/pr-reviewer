@@ -1,192 +1,67 @@
 # GitHub App PR Reviewer
 
-An AI-powered GitHub App that automatically reviews pull requests and provides feedback using OpenAI.
+An AI pull request reviewer delivered as a GitHub App. It runs as two Python microservices built with FastAPI, connected by a Redis queue, and uses LangChain and OpenAI to write the review.
 
-## Features
-
-- 🤖 AI-powered code review using OpenAI
-- 🔄 Automatic review on PR creation and updates
-- 💬 Posts feedback directly as PR comments
-- 🔒 Secure webhook handling with signature verification
-- 🚀 Ready for production deployment
-
-## Setup Instructions
-
-### Quickstart (for teammates)
-
-1. Clone the project
-   ```bash
-   git clone <repo-url>
-   cd <repo-folder>
-   ```
-
-2. Create your environment file
-   ```bash
-   cp .env.example .env
-   ```
-   Fill in: `GITHUB_APP_ID`, `GITHUB_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`, `OPENAI_API_KEY`.
-
-3. Install dependencies
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-4. Run and validate locally
-   - Follow the steps in “Testing with ngrok (Organization GitHub App)”.
-
-### 1. GitHub App (already created)
-
-- The GitHub App for this project is already created in the organization. You do not need to create it again.
-- If you are an org admin and need to adjust settings (Webhook URL, permissions/events, or installation), see “Organization configuration notes” below.
-- As a teammate, just ensure the App is installed on the target repository. If not, ask an org admin to install it.
-
-### 2. Environment Setup
-
-1. Clone this repository
-2. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-3. Create `.env` file:
-   ```bash
-   cp .env.example .env
-   ```
-4. Fill in your environment variables in `.env`
-
-### 3. Production Deployment
-
-Deploy to your preferred platform (Vercel, Render, Railway) and update the webhook URL.
-
-## Environment Variables
-
-Create a `.env` file with the following variables:
-
-```env
-GITHUB_APP_ID=your_app_id
-GITHUB_PRIVATE_KEY=your_private_key
-GITHUB_WEBHOOK_SECRET=your_webhook_secret
-OPENAI_API_KEY=your_openai_api_key
-```
-
-## Project Structure
+## Architecture
 
 ```
-├── app.py                 # Main Flask application
-├── github_app.py          # GitHub App integration
-├── ai_reviewer.py         # OpenAI integration for code review
-├── webhook_handler.py     # Webhook event processing
-├── requirements.txt       # Python dependencies
-├── .env.example          # Environment variables template
-└── README.md             # This file
+GitHub ──webhook──▶ gateway (FastAPI) ──job──▶ Redis queue ──▶ reviewer (FastAPI + worker)
+                    verify signature                            fetch PR files (GitHub API)
+                    filter events                               review with LangChain + OpenAI
+                    respond 202 right away                      post comment on the PR
 ```
 
-### Code overview
-- `app.py`: Flask server, routes (`/`, `/webhook`, `/health`, `/clear-memory`). Wires requests to the webhook handler.
-- `webhook_handler.py`: Parses `pull_request` events, fetches changed files, calls the AI reviewer, posts the comment.
-- `ai_reviewer.py`: Builds a LangChain prompt/chain and generates the review text.
-- `github_app.py`: Authenticates as GitHub App (JWT/installation token) and calls GitHub REST API.
+- **gateway** (`pr_reviewer/gateway`): receives GitHub webhooks, checks the `X-Hub-Signature-256` HMAC, keeps only reviewable PR events (`opened`, `synchronize`, `reopened`, `ready_for_review`, never drafts) and queues a `ReviewJob`. GitHub stops waiting for a webhook after 10 seconds, so this service never calls the LLM.
+- **reviewer** (`pr_reviewer/reviewer`): a background worker takes jobs from the queue, skips any job whose commit is no longer the PR head, reviews the diff and posts the result. Its `/health` endpoint reports whether the worker is still running.
+- **common** (`pr_reviewer/common`): settings, the GitHub App client (JWT, a cached token per installation, paginated file lists), the queue and the shared job model.
 
-## Testing with ngrok (Organization GitHub App)
+Each review is stateless. No context is shared between PRs.
 
-1. Start the server
-   ```bash
-   python app.py
-   ```
+## Setup
 
-2. Expose port 3000 with ngrok
-   ```bash
-   ngrok http 3000
-   ```
-   Copy the HTTPS public ngrok URL (e.g., `https://<id>.ngrok-free.app`).
+```bash
+python3.11 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+cp env.example .env   # fill in GitHub App and OpenAI values
+```
 
-3. Configure the Webhook in your organization GitHub App
-   - Go to: Organization settings → Developer settings → GitHub Apps → your App
-   - In the "General" tab:
-     - Webhook URL: `https://<id>.ngrok-free.app/webhook`
-     - Save changes
-   - In "Permissions & events":
-     - Repository permissions: Pull requests (Read & write), Contents (Read)
-     - Subscribe to events: Pull requests
-     - Save changes
+| Variable | Used by | Notes |
+|---|---|---|
+| `GITHUB_WEBHOOK_SECRET` | gateway | Same secret configured in the GitHub App |
+| `GITHUB_APP_ID`, `GITHUB_PRIVATE_KEY` | reviewer | PEM key can use literal `\n` on one line |
+| `OPENAI_API_KEY`, `OPENAI_MODEL` | reviewer | Model defaults to `gpt-4o` |
+| `REDIS_URL`, `REVIEW_QUEUE_NAME` | both | Defaults to `redis://localhost:6379/0` |
 
-4. Install the App on the test repository
-   - From the same App page: "Install App" → choose the organization/repository
+## Running locally
 
-5. Test the flow
-   - Open or update a Pull Request in the repository where the App is installed
-   - The App will receive the event at `/webhook` and post a review comment
+```bash
+docker run -d --name prr-redis -p 6379:6379 redis:7-alpine
+uvicorn pr_reviewer.gateway.main:create_app --factory --port 8000
+uvicorn pr_reviewer.reviewer.main:create_app --factory --port 8001
+ngrok http 8000
+```
 
-Notes
-- If you change the ngrok URL, update the Webhook URL in the App.
-- Required variables in `.env`: `GITHUB_APP_ID`, `GITHUB_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`, `OPENAI_API_KEY`.
+Set the GitHub App webhook URL to `https://<id>.ngrok-free.app/webhook`, then open or update a PR in a repository where the App is installed.
 
-### Organization configuration notes
-- If the GitHub App already exists in the organization, you might not need admin permissions to run locally. However:
-  - Changing the App’s Webhook URL requires organization App admin privileges.
-  - Adjusting permissions (Pull requests, Contents) or subscribed events requires admin privileges.
-  - Installing the App in repositories also requires appropriate org permissions.
-- If you don’t have permissions, ask an org admin to:
-  1) Set Webhook URL to your current ngrok `https://<id>.ngrok-free.app/webhook`.
-  2) Confirm permissions and subscribed events as listed above.
-  3) Install the App on the target repository.
+## Tests
 
-### Troubleshooting and logs
-- GitHub deliveries
-  - Organization settings → Developer settings → GitHub Apps → your App → Advanced → Recent deliveries
-  - Inspect payload, response body, and status code (expect 200 on success)
+```bash
+pytest
+```
 
-- ngrok inspector
-  - Open `http://127.0.0.1:4040` to view incoming requests, headers, and responses
+The tests use an in-memory queue and a fake LLM, so they need neither Redis nor OpenAI.
 
-- Flask server logs
-  - Terminal running the app shows request handling and errors from `app.py`/`webhook_handler.py`
+## GitHub App configuration
 
-- Quick tips
-  - Use Python 3 explicitly if `python` is not available:
-    ```bash
-    python3 /Users/pedroyaya/Desktop/cg/ia/app.py
-    ```
-  - Kill any extra ngrok agent to avoid the 1-session limit:
-    ```bash
-    pkill -f ngrok; ngrok http 3000
-    ```
-  - Send a test ping to verify connectivity and see logs:
-    ```bash
-    curl -X POST https://<your-ngrok>.ngrok-free.app/webhook \
-      -H 'Content-Type: application/json' \
-      -H 'X-GitHub-Event: ping' \
-      -d '{}'
-    ```
+The App already exists in the organization. Org App admins manage these settings:
 
-## How It Works
+- Webhook URL: `https://<host>/webhook`
+- Repository permissions: Pull requests (Read & write), Contents (Read)
+- Subscribed events: Pull requests
+- Install the App on each repository you want reviewed
 
-1. **Webhook Reception**: GitHub sends webhook events when PRs are created/updated
-2. **Diff Extraction**: The app fetches the PR diff using GitHub API
-3. **AI Review**: The diff is sent to OpenAI for code review
-4. **Comment Posting**: AI feedback is posted as a comment on the PR
+## Troubleshooting
 
-### Main component flow (plain language)
-1) A Pull Request is opened or updated in GitHub.
-2) GitHub sends a message (a “webhook”) to our app at `/webhook`.
-3) Our app checks that the message is real and comes from GitHub.
-4) The app asks GitHub which files changed in that Pull Request.
-5) The app sends those changes to the AI and asks for review feedback.
-6) The AI returns a human‑readable review (issues, suggestions, summary).
-7) The app posts that review as a comment directly on the Pull Request.
-
-Where this happens in the code (optional):
-- `app.py`: receives the message from GitHub at `/webhook` and passes it on.
-- `webhook_handler.py`: main coordinator; checks the message, gets changed files, calls the AI, and posts the comment.
-- `github_app.py`: talks to GitHub’s API (fetch files, post comments).
-- `ai_reviewer.py`: talks to the AI to generate the review text.
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Submit a pull request
-
-## License
-
-MIT License 
+- **GitHub deliveries**: App settings → Advanced → Recent deliveries. A queued review returns `202`; an event that is ignored returns `200`; a bad signature returns `401`.
+- **ngrok inspector**: `http://127.0.0.1:4040`
+- **Logs**: each service logs the `delivery_id` from GitHub, so you can follow one webhook from the gateway through to the reviewer.

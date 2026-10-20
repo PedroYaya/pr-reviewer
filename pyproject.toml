@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pr-reviewer"
+version = "0.2.0"
+description = "AI pull request reviewer delivered as a GitHub App"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115,<1",
+    "uvicorn[standard]>=0.30,<1",
+    "pydantic>=2.7,<3",
+    "pydantic-settings>=2.4,<3",
+    "redis>=5,<9",
+    "requests>=2.32,<3",
+    "PyJWT[crypto]>=2.9,<3",
+    "langchain-core>=1.0,<2",
+    "langchain-openai>=1.0,<2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "httpx>=0.27",
+]
+
+[tool.setuptools.packages.find]
+include = ["pr_reviewer*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
