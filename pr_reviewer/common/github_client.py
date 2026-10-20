@@ -109,6 +109,15 @@ class GitHubAppClient:
             return [entries["path"]]
         return [f"{e['path']}/" if e["type"] == "dir" else e["path"] for e in entries]
 
+    def list_review_comments(self, installation_id: int, owner: str, repo: str, limit: int) -> list[dict[str, Any]]:
+        """Most recent inline review comments across all PRs in the repository."""
+        return self._request(
+            "GET",
+            installation_id,
+            f"/repos/{owner}/{repo}/pulls/comments",
+            params={"sort": "created", "direction": "desc", "per_page": limit},
+        ).json()
+
     def create_review(
         self,
         installation_id: int,

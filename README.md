@@ -6,9 +6,10 @@ An AI pull request reviewer delivered as a GitHub App. It runs as two Python mic
 
 ```
 GitHub ──webhook──▶ gateway (FastAPI) ──job──▶ Redis queue ──▶ reviewer (FastAPI + worker)
-                    verify signature                            fetch PR files (GitHub API)
-                    filter events                               review with LangChain + OpenAI
-                    respond 202 right away                      post review with inline comments
+                    verify signature                            fetch PR files, apply token budget
+                    filter events                               retrieve team conventions (RAG)
+                    respond 202 right away                      review with LangChain + OpenAI
+                                                                post review with inline comments
 ```
 
 - **gateway** (`pr_reviewer/gateway`): receives GitHub webhooks, checks the `X-Hub-Signature-256` HMAC, keeps only reviewable PR events (`opened`, `synchronize`, `reopened`, `ready_for_review`, never drafts) and queues a `ReviewJob`. GitHub stops waiting for a webhook after 10 seconds, so this service never calls the LLM.
@@ -19,10 +20,12 @@ Each review is stateless. No context is shared between PRs.
 
 ### Review agent
 
-1. **Numbered diff** (`reviewer/diff.py`): each diff line in the prompt starts with its line number in the new file, so the model can point to exact lines.
-2. **Tool calling** (`reviewer/agent.py`, `reviewer/repo_tools.py`): the model can call `read_file` and `list_directory` to read the repository at the PR's head commit, for up to 5 rounds. Tool results are capped at 20k characters.
-3. **Structured output** (`reviewer/schemas.py`): the model finishes by calling the `ReviewResult` tool. OpenAI strict mode constrains its arguments to the schema, and Pydantic validates them: a summary plus findings with `path`, `line`, `severity`, `category`, `title`, `explanation` and `suggestion`. If the model uses up the tool rounds, `ReviewResult` is forced.
-4. **Publishing** (`reviewer/publisher.py`): findings become a GitHub pull request review, ordered by severity. Findings on lines that are in the diff become inline comments. Findings on other lines go in the review body, because a single invalid line makes GitHub reject the whole review with a 422.
+1. **Token budget** (`reviewer/budget.py`): lock files, generated code, deleted files and binaries are skipped. Each patch is capped at `FILE_TOKEN_BUDGET` tokens, and files are admitted smallest first until `DIFF_TOKEN_BUDGET` is used up. The review body lists every file that was left out and why. Token usage reported by OpenAI is logged for every review.
+2. **RAG over conventions** (`reviewer/conventions.py`, `reviewer/retrieval.py`): two sources are indexed in a vector store with OpenAI embeddings (`text-embedding-3-small`). The first is guideline files in the repo (`CONTRIBUTING.md`, `STYLEGUIDE.md`, `REVIEW_GUIDELINES.md`, `AGENTS.md`, … in the root, `.github/` or `docs/`), split by markdown section. The second is the last 100 human review comments on the repo's PRs, together with the code they were about. For each changed file the top matches go into the prompt, and the agent also has a `search_conventions` tool. Embeddings are cached in Redis by content hash, so later reviews of the same repo hardly re-embed anything. If loading conventions fails, the review goes ahead without them.
+3. **Numbered diff** (`reviewer/diff.py`): each diff line in the prompt starts with its line number in the new file, so the model can point to exact lines.
+4. **Tool calling** (`reviewer/agent.py`, `reviewer/repo_tools.py`): the model can call `read_file`, `list_directory` and `search_conventions` to read the repository at the PR's head commit, for up to 5 rounds. Tool results are capped at 20k characters.
+5. **Structured output** (`reviewer/schemas.py`): the model finishes by calling the `ReviewResult` tool. OpenAI strict mode constrains its arguments to the schema, and Pydantic validates them: a summary plus findings with `path`, `line`, `severity`, `category`, `title`, `explanation` and `suggestion`. If the model uses up the tool rounds, `ReviewResult` is forced.
+6. **Publishing** (`reviewer/publisher.py`): findings become a GitHub pull request review, ordered by severity. Findings on lines that are in the diff become inline comments. Findings on other lines go in the review body, because a single invalid line makes GitHub reject the whole review with a 422.
 
 ## Setup
 
@@ -38,6 +41,9 @@ cp env.example .env   # fill in GitHub App and OpenAI values
 | `GITHUB_APP_ID`, `GITHUB_PRIVATE_KEY` | reviewer | PEM key can use literal `\n` on one line |
 | `OPENAI_API_KEY`, `OPENAI_MODEL` | reviewer | Model defaults to `gpt-4o` |
 | `REDIS_URL`, `REVIEW_QUEUE_NAME` | both | Defaults to `redis://localhost:6379/0` |
+| `OPENAI_EMBEDDING_MODEL` | reviewer | Defaults to `text-embedding-3-small` |
+| `DIFF_TOKEN_BUDGET`, `FILE_TOKEN_BUDGET` | reviewer | Defaults to 24000 / 6000 tokens |
+| `CONVENTIONS_TOP_K` | reviewer | Convention snippets added to the prompt (default 6) |
 
 ## Running locally
 

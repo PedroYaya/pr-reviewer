@@ -1,8 +1,10 @@
 """Turns a structured review into a GitHub pull request review payload."""
 
 from collections import Counter
+from collections.abc import Sequence
 from typing import Any
 
+from pr_reviewer.reviewer.budget import OmittedFile
 from pr_reviewer.reviewer.diff import commentable_lines
 from pr_reviewer.reviewer.schemas import SEVERITY_ORDER, ReviewFinding, ReviewResult
 
@@ -16,7 +18,9 @@ def format_finding(finding: ReviewFinding) -> str:
     return text
 
 
-def build_review(result: ReviewResult, files: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
+def build_review(
+    result: ReviewResult, files: list[dict[str, Any]], omitted: Sequence[OmittedFile] = ()
+) -> tuple[str, list[dict[str, Any]]]:
     """Return (review body, inline comments).
 
     Findings on lines outside the diff can't be posted inline (GitHub rejects
@@ -44,4 +48,8 @@ def build_review(result: ReviewResult, files: list[dict[str, Any]]) -> tuple[str
         body += "\n\n### Other findings\n\n" + "\n\n".join(
             f"`{f.path}:{f.line}`: {format_finding(f)}" for f in unplaced
         )
+    if omitted:
+        body += f"\n\n<details><summary>{len(omitted)} file(s) not reviewed</summary>\n\n" + "\n".join(
+            f"- `{o.filename}`: {o.reason}" for o in omitted
+        ) + "\n</details>"
     return body, comments

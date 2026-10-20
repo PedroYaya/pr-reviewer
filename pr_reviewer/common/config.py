@@ -22,6 +22,13 @@ class ReviewerSettings(QueueSettings):
     openai_api_key: SecretStr
     openai_model: str = "gpt-4o"
     openai_temperature: float = 0.2
+    openai_embedding_model: str = "text-embedding-3-small"
+
+    diff_token_budget: int = 24_000
+    file_token_budget: int = 6_000
+    conventions_top_k: int = 6
+    review_comments_limit: int = 100
+    embedding_cache_ttl_seconds: int = 30 * 24 * 3600
 
     @field_validator("github_private_key", mode="before")
     @classmethod

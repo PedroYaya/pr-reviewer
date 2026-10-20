@@ -112,3 +112,13 @@ def test_creates_comment_review_on_commit(private_key):
     method, url, kwargs = session.requests[0]
     assert (method, url.endswith("/repos/acme/repo/pulls/7/reviews")) == ("POST", True)
     assert kwargs["json"] == {"commit_id": "abc123", "event": "COMMENT", "body": "Summary", "comments": comments}
+
+
+def test_lists_recent_review_comments(private_key):
+    session = FakeSession(pages=[[{"id": 1}]])
+    client = GitHubAppClient("123", private_key, session=session)
+
+    assert client.list_review_comments(1, "acme", "repo", limit=50) == [{"id": 1}]
+    _, url, kwargs = session.requests[0]
+    assert url.endswith("/repos/acme/repo/pulls/comments")
+    assert kwargs["params"] == {"sort": "created", "direction": "desc", "per_page": 50}

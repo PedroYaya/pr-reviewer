@@ -1,3 +1,4 @@
+from pr_reviewer.reviewer.budget import OmittedFile
 from pr_reviewer.reviewer.publisher import build_review
 from pr_reviewer.reviewer.schemas import ReviewResult
 from tests.fakes import finding
@@ -46,3 +47,10 @@ def test_no_findings():
 
     assert comments == []
     assert body.endswith("No issues found.")
+
+
+def test_lists_omitted_files_in_collapsible_section():
+    body, _ = build_review(result(), FILES, [OmittedFile("poetry.lock", "lock file or generated code")])
+
+    assert "<details><summary>1 file(s) not reviewed</summary>" in body
+    assert "- `poetry.lock`: lock file or generated code" in body

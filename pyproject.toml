@@ -17,6 +17,8 @@ dependencies = [
     "PyJWT[crypto]>=2.9,<3",
     "langchain-core>=1.0,<2",
     "langchain-openai>=1.0,<2",
+    "langchain-text-splitters>=1.0,<2",
+    "numpy>=1.26,<3",
 ]
 
 [project.optional-dependencies]
