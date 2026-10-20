@@ -3,7 +3,7 @@
 import time
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
 # "review" comes from PR events or a `/ai-review` comment; "approve" and
 # "dismiss" act on a draft review waiting for a maintainer.
@@ -26,3 +26,5 @@ class ReviewJob(BaseModel):
     enqueued_at: float = Field(default_factory=time.time)
     # W3C trace context from the gateway, so the worker's spans join the webhook's trace.
     trace_context: dict[str, str] = Field(default_factory=dict)
+    # SQS receipt handle of the message this job came from; never serialized.
+    _receipt_handle: str | None = PrivateAttr(default=None)

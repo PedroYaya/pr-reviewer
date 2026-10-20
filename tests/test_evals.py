@@ -1,6 +1,7 @@
 import pytest
 
 from pr_reviewer.evals.cases import DictRepoReader, load_cases
+from pr_reviewer.evals import run
 from pr_reviewer.evals.judge import FindingVerdict
 from pr_reviewer.evals.run import VARIANTS, format_report, run_case
 from pr_reviewer.evals.scoring import score_case, summarize
@@ -139,3 +140,14 @@ def test_report_formats_percentages_side_by_side():
     assert "| Metric | full | baseline |" in report
     assert "| Useful findings (judge) | 80% | 60% |" in report
     assert "| Avg total tokens | 1500 | 2000 |" in report
+
+
+def test_main_builds_clients_and_writes_results(tmp_path, monkeypatch):
+    # Smoke test for the CLI wiring: no API calls, the suite itself is stubbed out.
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setattr(run, "run_suite", lambda *args, **kwargs: [])
+    monkeypatch.setattr(run, "summarize", lambda scores: {"useful_rate": None})
+    monkeypatch.setattr(run, "format_report", lambda summaries: "")
+
+    assert run.main(["--variant", "full", "--out", str(tmp_path)]) == 0
+    assert len(list(tmp_path.glob("*.json"))) == 1

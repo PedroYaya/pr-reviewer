@@ -1,0 +1,8 @@
+region             = "us-east-1"
+vpc_id             = "vpc-0123456789abcdef0"
+public_subnet_ids  = ["subnet-aaa", "subnet-bbb"]
+private_subnet_ids = ["subnet-ccc", "subnet-ddd"]
+certificate_arn    = "arn:aws:acm:us-east-1:123456789012:certificate/..."
+github_repository  = "your-org/pr-reviewer"
+github_app_id      = "123456"
+alarm_email        = "oncall@example.com"

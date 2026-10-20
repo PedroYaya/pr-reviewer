@@ -329,3 +329,25 @@ def test_successful_review_is_counted():
     worker.handle(make_job())
 
     assert jobs_metric("success") == before + 1
+
+
+def test_run_acks_every_job_even_when_it_fails():
+    class AckingQueue(InMemoryJobQueue):
+        acked = []
+
+        def ack(self, job):
+            self.acked.append(job.delivery_id)
+
+    queue = AckingQueue()
+    github = FakeGitHub()
+    worker = ReviewWorker(queue, github, ReviewAgent(ScriptedChatModel(responses=[])))
+
+    def failing_then_stop(*args):
+        worker.stop()
+        raise RuntimeError("GitHub is down")
+
+    github.get_pull_request = failing_then_stop
+    queue.enqueue(make_job())
+    worker.run()
+
+    assert queue.acked == ["d1"]

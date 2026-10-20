@@ -60,6 +60,7 @@ class EvalSettings(BaseSettings):
     openai_temperature: float = 0.2
     openai_embedding_model: str = "text-embedding-3-small"
     openai_judge_model: str = "gpt-4o"
+    openai_max_retries: int = 4
 
 
 def conventions_loader(case: EvalCase, embeddings: Embeddings | None) -> ConventionsLoader | None:
@@ -152,7 +153,10 @@ def main(argv: list[str] | None = None) -> int:
         cases = [c for c in cases if c.id in set(args.case)]
     variants = args.variant or ["full", "baseline"]
 
-    agent = ReviewAgent(ChatOpenAI(model=settings.openai_model, temperature=settings.openai_temperature, api_key=settings.openai_api_key))
+    agent = ReviewAgent(ChatOpenAI(
+        model=settings.openai_model, temperature=settings.openai_temperature,
+        api_key=settings.openai_api_key, max_retries=settings.openai_max_retries,
+    ))
     # Shared in-memory cache: variants and repeats don't re-embed the same conventions.
     embeddings = CachedEmbeddings(
         OpenAIEmbeddings(
@@ -163,7 +167,8 @@ def main(argv: list[str] | None = None) -> int:
         InMemoryKeyValueStore(), settings.openai_embedding_model, ttl_seconds=0,
     )
     judge = None if args.no_judge else LLMJudge(
-        ChatOpenAI(model=settings.openai_judge_model, temperature=0, api_key=settings.openai_api_key)
+        ChatOpenAI(model=settings.openai_judge_model, temperature=0, api_key=settings.openai_api_key,
+                   max_retries=settings.openai_max_retries)
     )
 
     summaries, details = {}, {}

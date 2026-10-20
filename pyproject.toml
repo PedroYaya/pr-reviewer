@@ -25,6 +25,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# SQS queue backend, used on AWS.
+aws = [
+    "boto3>=1.34,<2",
+]
 # Exports traces over OTLP/HTTP when OTEL_EXPORTER_OTLP_ENDPOINT is set.
 otel = [
     "opentelemetry-sdk>=1.27,<2",
@@ -34,6 +38,7 @@ dev = [
     "pytest>=8",
     "httpx>=0.27",
     "opentelemetry-sdk>=1.27,<2",
+    "boto3>=1.34,<2",
 ]
 
 [tool.setuptools.packages.find]

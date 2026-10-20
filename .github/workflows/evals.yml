@@ -1,0 +1,61 @@
+name: Evals
+
+# The eval suite calls OpenAI, so it doesn't run on every push: run it by hand,
+# weekly, or on a PR labelled `run-evals` that touches the reviewer or the cases.
+on:
+  workflow_dispatch:
+    inputs:
+      repeat:
+        description: Runs per case
+        default: "1"
+  schedule:
+    - cron: "0 6 * * 1"
+  pull_request:
+    types: [labeled, synchronize]
+    paths:
+      - "pr_reviewer/reviewer/**"
+      - "pr_reviewer/evals/**"
+      - "evals/**"
+
+permissions:
+  contents: read
+
+jobs:
+  evals:
+    # EVALS_ENABLED is a repository variable, set where the OpenAI key is configured.
+    if: vars.EVALS_ENABLED == 'true' && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-evals'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: pip install -e .
+      - name: Check the OpenAI key is configured
+        run: |
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "::error::OPENAI_API_KEY secret is not set for this repository"
+            exit 1
+          fi
+      # Fails the job if the full pipeline drops below these thresholds.
+      - name: Run full pipeline vs baseline with LLM judge
+        shell: bash  # adds pipefail, so tee doesn't hide a failing exit code
+        run: |
+          python -m pr_reviewer.evals.run \
+            --repeat "${{ inputs.repeat || '1' }}" \
+            --fail-under-useful 0.7 \
+            --fail-under-recall 0.8 | tee eval-report.txt
+      - if: always()
+        run: |
+          { echo '## Eval results'; echo '```'; cat eval-report.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-results
+          path: evals/results/*.json
+          if-no-files-found: ignore

@@ -1,0 +1,58 @@
+# Local stack: Redis, both services, and optionally Prometheus + Jaeger.
+#   docker compose up --build
+#   OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318 docker compose --profile observability up --build
+#     adds Prometheus (:9090) and Jaeger (:16686), with traces from both services
+
+x-app: &app
+  build: .
+  image: pr-reviewer:local
+  env_file:
+    - path: .env
+      required: false
+  environment: &app-env
+    REDIS_URL: redis://redis:6379/0
+    QUEUE_BACKEND: redis
+    LOG_FORMAT: json
+    OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+  depends_on:
+    redis:
+      condition: service_healthy
+  restart: unless-stopped
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 5
+
+  gateway:
+    <<: *app
+    environment:
+      <<: *app-env
+      SERVICE: gateway
+      PORT: "8000"
+    ports: ["8000:8000"]
+
+  reviewer:
+    <<: *app
+    environment:
+      <<: *app-env
+      SERVICE: reviewer
+      PORT: "8001"
+    ports: ["8001:8001"]
+    # Matches ECS stopTimeout: time to finish the review in progress.
+    stop_grace_period: 120s
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    profiles: [observability]
+    volumes: ["./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro"]
+    ports: ["9090:9090"]
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.65.0
+    profiles: [observability]
+    ports: ["16686:16686", "4318:4318"]

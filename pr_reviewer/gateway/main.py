@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse
 from pr_reviewer.common.config import GatewaySettings
 from pr_reviewer.common import metrics
 from pr_reviewer.common.logging import configure_logging, log_context
-from pr_reviewer.common.queue import JobQueue, RedisJobQueue
+from pr_reviewer.common.queue import JobQueue, build_queue
 from pr_reviewer.common.tracing import configure_tracing, inject_context, tracer
 from pr_reviewer.gateway.events import job_from_issue_comment_event, job_from_pull_request_event
 from pr_reviewer.gateway.signature import is_valid_signature
@@ -34,7 +34,7 @@ def create_app(settings: GatewaySettings | None = None, queue: JobQueue | None =
     configure_logging(settings.log_level, settings.log_format)
     configure_tracing("pr-reviewer-gateway", settings.otel_exporter_otlp_endpoint)
     if queue is None:
-        queue = RedisJobQueue.from_url(settings.redis_url, settings.review_queue_name)
+        queue = build_queue(settings)
     webhook_secret = settings.github_webhook_secret.get_secret_value().encode()
 
     app = FastAPI(title="PR Reviewer Gateway")

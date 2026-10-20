@@ -11,6 +11,11 @@ class QueueSettings(BaseSettings):
 
     redis_url: str = "redis://localhost:6379/0"
     review_queue_name: str = "pr-review-jobs"
+    # "redis" for local runs; "sqs" on AWS (needs the "aws" extra).
+    queue_backend: Literal["redis", "sqs"] = "redis"
+    sqs_queue_url: str | None = None
+    sqs_dead_letter_queue_url: str | None = None
+    aws_region: str | None = None
     log_level: str = "INFO"
     log_format: Literal["json", "text"] = "json"
     # Tracing is off unless this is set, e.g. http://localhost:4318
@@ -36,6 +41,8 @@ class ReviewerSettings(QueueSettings):
     # A job that still fails is retried later (base * 4^n seconds), then dead-lettered.
     job_max_attempts: int = 3
     job_retry_base_seconds: float = 30.0
+    # Time a job in progress gets to finish on shutdown (ECS stopTimeout is 120 s).
+    shutdown_grace_seconds: float = 100.0
 
     diff_token_budget: int = 24_000
     file_token_budget: int = 6_000

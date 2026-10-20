@@ -69,3 +69,9 @@ coverage.xml
 *.cover
 .hypothesis/
 .pytest_cache/ 
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example

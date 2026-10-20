@@ -1,11 +1,11 @@
 # GitHub App PR Reviewer
 
-An AI pull request reviewer delivered as a GitHub App. It runs as two Python microservices built with FastAPI, connected by a Redis queue, and uses LangChain and OpenAI to write the review.
+An AI pull request reviewer delivered as a GitHub App. It runs as two Python microservices built with FastAPI, connected by a job queue (Redis locally, Amazon SQS on AWS), and uses LangChain and OpenAI to write the review. Both services ship as one Docker image, run on ECS Fargate, and are deployed from GitHub Actions.
 
 ## Architecture
 
 ```
-GitHub ──webhook──▶ gateway (FastAPI) ──job──▶ Redis queue ──▶ reviewer (FastAPI + worker)
+GitHub ──webhook──▶ gateway (FastAPI) ──job──▶ SQS / Redis ──▶ reviewer (FastAPI + worker)
                     verify signature                            fetch PR files, apply token budget
                     filter events                               retrieve team conventions (RAG)
                     respond 202 right away                      review with LangChain + OpenAI
@@ -48,13 +48,14 @@ Commands are only accepted from users whose association with the repo is `OWNER`
 Retries happen at two levels.
 
 - **Per call.** The OpenAI SDK retries 429, 5xx and connection errors with exponential backoff and honours `Retry-After` (`OPENAI_MAX_RETRIES`, `OPENAI_TIMEOUT_SECONDS`). GitHub calls go through a tenacity policy (`common/retry.py`): rate limits (429, or 403 with `Retry-After` or `x-ratelimit-remaining: 0`) wait as long as GitHub asks, capped at 60 s, and are retried for any method, because GitHub never processed the request. Timeouts, connection errors and 5xx are retried with jittered backoff, but only for GETs. A POST that timed out may already have created the review.
-- **Per job.** If a job still fails, the worker puts it in a Redis sorted set (`<queue>:delayed`) to run again after 30 s, then 120 s (`JOB_RETRY_BASE_SECONDS × 4ⁿ`). After `JOB_MAX_ATTEMPTS` it goes to `<queue>:dead` along with the error. Failures a retry can't fix go straight to the dead-letter list: 4xx other than 408/409/429, such as a deleted PR or a 422 on the review. So does a timeout or 5xx while posting the review, so that it's never posted twice. Several workers can share the queue: `ZREM` makes sure only one of them takes each due retry.
+- **Per job.** If a job still fails, the worker schedules it to run again after 30 s, then 120 s (`JOB_RETRY_BASE_SECONDS × 4ⁿ`). After `JOB_MAX_ATTEMPTS` it goes to the dead-letter queue along with the error. On SQS a retry is a new message with `DelaySeconds`, and the dead-letter queue is the SQS DLQ. With Redis, retries wait in a sorted set (`<queue>:delayed`) and dead jobs go to the `<queue>:dead` list. Failures a retry can't fix go straight to the dead-letter list: 4xx other than 408/409/429, such as a deleted PR or a 422 on the review. So does a timeout or 5xx while posting the review, so that it's never posted twice. Several workers can share the queue: `ZREM` makes sure only one of them takes each due retry.
+- **Worker crashes.** With SQS, a message is deleted only after its job is handled. If a worker dies mid-review, the message becomes visible again after 15 minutes and another worker picks it up. After 3 deliveries the redrive policy moves it to the DLQ. On shutdown (ECS sends SIGTERM), the worker stops taking jobs and gets up to `SHUTDOWN_GRACE_SECONDS` to finish the current one. Redis `BRPOP` has no such guarantee, which is why production uses SQS.
 
 ```bash
 redis-cli LRANGE pr-review-jobs:dead 0 -1   # each entry: {"job": …, "error": …, "failed_at": …}
 ```
 
-To replay a dead job, push its `job` field back onto `pr-review-jobs`.
+To replay a dead job, push the entry back onto `pr-review-jobs` (`redis-cli RPOPLPUSH pr-review-jobs:dead pr-review-jobs`). The worker reads dead-letter entries as normal jobs.
 
 ## Observability
 
@@ -80,7 +81,7 @@ sum(rate(prr_review_jobs_total{outcome="success"}[1d]))
 
 ```bash
 python3.11 -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
+pip install -e ".[dev]"      # add ,aws for SQS and ,otel to export traces
 cp env.example .env   # fill in GitHub App and OpenAI values
 ```
 
@@ -99,8 +100,22 @@ cp env.example .env   # fill in GitHub App and OpenAI values
 | `JOB_MAX_ATTEMPTS`, `JOB_RETRY_BASE_SECONDS` | reviewer | Job-level retries before dead-lettering (defaults 3 / 30) |
 | `LOG_FORMAT` | both | `json` (default) or `text` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | both | Enables tracing, e.g. `http://localhost:4318` |
+| `QUEUE_BACKEND` | both | `redis` (default) or `sqs` |
+| `SQS_QUEUE_URL`, `SQS_DEAD_LETTER_QUEUE_URL`, `AWS_REGION` | both | Required with `QUEUE_BACKEND=sqs` |
+| `SHUTDOWN_GRACE_SECONDS` | reviewer | Time to finish the current job on shutdown (default 100) |
 
 ## Running locally
+
+With Docker:
+
+```bash
+docker compose up --build            # redis, gateway on :8000, reviewer on :8001
+OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318 docker compose --profile observability up --build
+                                     # adds Prometheus on :9090 and Jaeger on :16686
+ngrok http 8000
+```
+
+Without Docker:
 
 ```bash
 docker run -d --name prr-redis -p 6379:6379 redis:7-alpine
@@ -108,6 +123,8 @@ uvicorn pr_reviewer.gateway.main:create_app --factory --port 8000
 uvicorn pr_reviewer.reviewer.main:create_app --factory --port 8001
 ngrok http 8000
 ```
+
+The `Dockerfile` builds a single image (multi-stage, runs as a non-root user). `SERVICE=gateway|reviewer` picks which app it starts.
 
 Set the GitHub App webhook URL to `https://<id>.ngrok-free.app/webhook`, then open or update a PR in a repository where the App is installed.
 
@@ -144,6 +161,46 @@ The suite runs the same `run_review_pipeline` as the worker, with no GitHub acce
 | Avg tokens, LLM calls, tool calls, seconds | Taken from OpenAI usage metadata for each case |
 
 Results are written to `evals/results/<timestamp>.json`, with every finding and the judge's reasoning. `--fail-under-useful 0.7` and `--fail-under-recall 0.8` make the command exit non-zero below those thresholds, for CI.
+
+## CI/CD
+
+| Workflow | Trigger | What it does |
+|---|---|---|
+| `ci.yml` | Every push and PR | `pytest` on Python 3.11 and 3.12; builds the Docker image and checks that both services start and serve `/health` and `/metrics`; `terraform fmt`/`validate` |
+| `deploy.yml` | CI passing on `main`, or by hand | Assumes an AWS role through GitHub OIDC (no stored AWS keys), pushes the image to ECR tagged with the commit SHA, and rolls out the reviewer, then the gateway, waiting for each to be stable. ECS rolls back automatically if new tasks fail their health checks |
+| `evals.yml` | By hand, weekly, or on a PR labelled `run-evals` | Runs the eval suite against OpenAI, fails below 70% useful findings or 80% recall, and uploads the results |
+
+`deploy.yml` needs the repository variables `AWS_REGION`, `AWS_DEPLOY_ROLE_ARN`, `ECS_CLUSTER` and `ECR_REPOSITORY`, and a `production` environment. `evals.yml` needs the `OPENAI_API_KEY` secret and `EVALS_ENABLED=true`. Without them, both workflows are skipped.
+
+## AWS deployment
+
+> **Note:** like the evals, the production AWS account, its Terraform state and its variables live in the private company repository. This Terraform is the same module without account-specific values.
+
+`infra/` is a Terraform module that deploys into an existing VPC:
+
+```
+GitHub ─▶ ALB (HTTPS, only /webhook) ─▶ ECS Fargate: gateway ×2 ─▶ SQS ─▶ ECS Fargate: reviewer (autoscaled 1–4)
+                                                                    └─▶ DLQ ─▶ alarm        ├─▶ ElastiCache Redis (embeddings, drafts)
+                                                                                             └─▶ GitHub API, OpenAI (via NAT)
+```
+
+- **ECS Fargate**: one task definition per service, from the same image. Secrets come from Secrets Manager as environment variables. Each service has its own task role: the gateway can only send to SQS, while the reviewer can receive, delete and dead-letter jobs.
+- **SQS**: 15-minute visibility timeout, redrive to the DLQ after 3 receives, server-side encryption. The reviewer service scales on queue depth.
+- **Observability**: logs go to CloudWatch Logs. An ADOT collector sidecar sends traces to X-Ray and turns the Prometheus metrics into CloudWatch metrics (`PRReviewer` namespace).
+- **Alarms** (SNS): any message in the DLQ, oldest job waiting over 10 minutes, successful run rate under 90% over 3 hours, and gateway 5xx responses.
+
+```bash
+cd infra
+cp terraform.tfvars.example terraform.tfvars          # VPC, subnets, certificate, repo
+terraform init -backend-config="bucket=<state-bucket>" -backend-config="key=pr-reviewer.tfstate" -backend-config="region=us-east-1"
+terraform apply
+aws secretsmanager put-secret-value --secret-id pr-reviewer/openai-api-key --secret-string "$OPENAI_API_KEY"
+# ...the same for pr-reviewer/github-private-key and pr-reviewer/github-webhook-secret
+```
+
+Then set the GitHub variables from the Terraform outputs and run `deploy.yml`. Point the GitHub App webhook at the `webhook_url` output (use a DNS name that matches the certificate).
+
+To replay dead-lettered jobs after a fix: `aws sqs start-message-move-task --source-arn <dlq-arn> --destination-arn <queue-arn>`. Jobs whose commit is no longer the PR head are skipped, so replaying old jobs doesn't post outdated reviews.
 
 ## GitHub App configuration
 

@@ -270,8 +270,19 @@ class ReviewWorker:
                 logger.exception("Failed to read from queue")
                 self._stop.wait(QUEUE_ERROR_BACKOFF_SECONDS)
                 continue
-            if job is not None:
+            if job is None:
+                continue
+            try:
                 self.handle(job)
+            finally:
+                self._ack(job)
+
+    def _ack(self, job: ReviewJob) -> None:
+        try:
+            self._queue.ack(job)
+        except Exception:
+            # The job will be delivered again; the stale-commit check keeps that harmless for PR events.
+            logger.exception("Failed to acknowledge job delivery=%s", job.delivery_id)
 
     def stop(self) -> None:
         self._stop.set()

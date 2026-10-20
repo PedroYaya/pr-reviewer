@@ -16,7 +16,7 @@ from pr_reviewer.common.embedding_cache import CachedEmbeddings, RedisKeyValueSt
 from pr_reviewer.common.github_client import GitHubAppClient
 from pr_reviewer.common.logging import configure_logging
 from pr_reviewer.common.metrics import add_metrics_route
-from pr_reviewer.common.queue import RedisJobQueue
+from pr_reviewer.common.queue import build_queue
 from pr_reviewer.common.tracing import configure_tracing
 from pr_reviewer.reviewer.agent import ReviewAgent
 from pr_reviewer.reviewer.budget import TokenBudget
@@ -37,7 +37,7 @@ def build_worker(settings: ReviewerSettings) -> ReviewWorker:
         ttl_seconds=settings.embedding_cache_ttl_seconds,
     )
     return ReviewWorker(
-        queue=RedisJobQueue(redis_client, settings.review_queue_name),
+        queue=build_queue(settings),
         github=GitHubAppClient(
             settings.github_app_id,
             settings.github_private_key.get_secret_value(),
@@ -67,7 +67,7 @@ def create_app(settings: ReviewerSettings | None = None, worker: ReviewWorker | 
         thread.start()
         yield
         worker.stop()
-        thread.join(timeout=10)
+        thread.join(timeout=settings.shutdown_grace_seconds)
 
     app = FastAPI(title="PR Reviewer Worker", lifespan=lifespan)
     add_metrics_route(app)

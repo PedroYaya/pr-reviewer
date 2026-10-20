@@ -1,0 +1,92 @@
+name: Deploy
+
+# Runs after CI passes on main. Builds the image, pushes it to ECR and rolls
+# both ECS services onto it. AWS access uses GitHub OIDC: no long-lived keys.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # Skipped in forks and copies that have no AWS account configured.
+    if: vars.AWS_DEPLOY_ROLE_ARN != '' && (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      CLUSTER: ${{ vars.ECS_CLUSTER }}
+      IMAGE_TAG: ${{ github.event.workflow_run.head_sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.IMAGE_TAG }}
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64
+          tags: ${{ steps.ecr.outputs.registry }}/${{ vars.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Terraform owns the task definitions; the pipeline only swaps the image.
+      - name: Download current task definitions
+        run: |
+          for service in gateway reviewer; do
+            aws ecs describe-task-definition --task-definition "pr-reviewer-$service" \
+              --query taskDefinition > "$service-task.json"
+          done
+
+      - id: gateway-task
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: gateway-task.json
+          container-name: app
+          image: ${{ steps.ecr.outputs.registry }}/${{ vars.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
+
+      - id: reviewer-task
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: reviewer-task.json
+          container-name: app
+          image: ${{ steps.ecr.outputs.registry }}/${{ vars.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
+
+      # Reviewer first: new workers can read jobs queued by the old gateway.
+      - name: Deploy reviewer
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.reviewer-task.outputs.task-definition }}
+          service: pr-reviewer-reviewer
+          cluster: ${{ env.CLUSTER }}
+          wait-for-service-stability: true
+
+      - name: Deploy gateway
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.gateway-task.outputs.task-definition }}
+          service: pr-reviewer-gateway
+          cluster: ${{ env.CLUSTER }}
+          wait-for-service-stability: true
