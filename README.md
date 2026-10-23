@@ -43,6 +43,32 @@ Each review is stateless. No context is shared between PRs.
 
 Commands are only accepted from users whose association with the repo is `OWNER`, `MEMBER` or `COLLABORATOR`, and comments from bots are ignored. With `REVIEW_MODE=approval`, the bot doesn't publish anything on its own. It posts a draft comment with a table of findings, and the review is published only when a maintainer approves it. If new commits arrive after the draft was made, approving it is refused.
 
+## Review history API
+
+GitHub only sees the published review. The reviewer service also records every review job in a SQLite database (`reviewer/history.py`, SQLModel), so a dashboard can show what GitHub never sees: reviews in progress, retries, failures, token use and dropped findings. Retries of a job update the same row, keyed by the webhook's delivery id. The worker is the only writer, and a failed history write is logged but never fails or repeats a review.
+
+| Endpoint (reviewer service) | Returns |
+|---|---|
+| `GET /api/reviews?status=&limit=` | Latest reviews first: status, PR, summary, findings, tokens, error |
+| `GET /api/reviews/{delivery_id}` | One review |
+| `GET /api/stats` | Number of reviews per status |
+
+Statuses: `reviewing`, `retrying`, `failed` (dead-lettered), `skipped`, `published`, and in approval mode `awaiting_approval`, then `approved` or `dismissed`. `/ai-review approve` and `dismiss` update the draft's row instead of adding their own.
+
+SQLite is one file owned by one service, which fits a single reviewer. On AWS, where the reviewer scales to several tasks with ephemeral disks, point `HISTORY_DATABASE_URL` at a shared Postgres database instead.
+
+### Dashboard
+
+`web/` is a small React 19 + TypeScript app (Vite) that shows reviews as they happen: counts per status, the latest reviews, and each review's summary, metrics and comments. Server state lives in TanStack Query, which polls the API every 2 seconds; the only client state is the status filter and the selected review.
+
+```bash
+cd web && nvm use && npm install
+npm run dev        # http://localhost:5173 with mock data, no backend needed
+npm run dev:api    # the same app against the reviewer service on :8001
+```
+
+The mocks use MSW, which intercepts `fetch` at the network level, and a small simulator (`web/src/mocks/simulator.ts`) that moves reviews through the worker's lifecycle: retries, dead-lettered jobs and drafts waiting for approval included.
+
 ## Reliability
 
 Retries happen at two levels.
@@ -103,6 +129,7 @@ cp env.example .env   # fill in GitHub App and OpenAI values
 | `QUEUE_BACKEND` | both | `redis` (default) or `sqs` |
 | `SQS_QUEUE_URL`, `SQS_DEAD_LETTER_QUEUE_URL`, `AWS_REGION` | both | Required with `QUEUE_BACKEND=sqs` |
 | `SHUTDOWN_GRACE_SECONDS` | reviewer | Time to finish the current job on shutdown (default 100) |
+| `HISTORY_DATABASE_URL` | reviewer | Review history database (default `sqlite:///reviews.db`; docker-compose keeps it in a volume) |
 
 ## Running locally
 
