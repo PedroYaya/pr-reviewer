@@ -42,7 +42,9 @@ services:
       <<: *app-env
       SERVICE: reviewer
       PORT: "8001"
+      HISTORY_DATABASE_URL: sqlite:////home/app/data/reviews.db
     ports: ["8001:8001"]
+    volumes: ["review-history:/home/app/data"]
     # Matches ECS stopTimeout: time to finish the review in progress.
     stop_grace_period: 120s
 
@@ -56,3 +58,6 @@ services:
     image: jaegertracing/all-in-one:1.65.0
     profiles: [observability]
     ports: ["16686:16686", "4318:4318"]
+
+volumes:
+  review-history:

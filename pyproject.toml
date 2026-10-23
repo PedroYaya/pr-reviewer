@@ -22,6 +22,7 @@ dependencies = [
     "tenacity>=9,<10",
     "prometheus-client>=0.20,<1",
     "opentelemetry-api>=1.27,<2",
+    "sqlmodel>=0.0.22,<0.1",
 ]
 
 [project.optional-dependencies]

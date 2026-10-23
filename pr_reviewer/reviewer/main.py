@@ -1,4 +1,4 @@
-"""Reviewer service: runs the queue worker and exposes health and metrics endpoints.
+"""Reviewer service: runs the queue worker and exposes health, metrics and review history endpoints.
 
 Run with: uvicorn pr_reviewer.reviewer.main:create_app --factory --port 8001
 """
@@ -7,7 +7,7 @@ import threading
 from contextlib import asynccontextmanager
 
 import redis
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse
 from langchain_openai import OpenAIEmbeddings
 
@@ -21,10 +21,11 @@ from pr_reviewer.common.tracing import configure_tracing
 from pr_reviewer.reviewer.agent import ReviewAgent
 from pr_reviewer.reviewer.budget import TokenBudget
 from pr_reviewer.reviewer.drafts import RedisDraftStore
+from pr_reviewer.reviewer.history import ReviewHistory, ReviewRecord
 from pr_reviewer.reviewer.worker import ReviewWorker
 
 
-def build_worker(settings: ReviewerSettings) -> ReviewWorker:
+def build_worker(settings: ReviewerSettings, history: ReviewHistory) -> ReviewWorker:
     redis_client = redis.Redis.from_url(settings.redis_url)
     embeddings = CachedEmbeddings(
         OpenAIEmbeddings(
@@ -52,14 +53,20 @@ def build_worker(settings: ReviewerSettings) -> ReviewWorker:
         drafts=RedisDraftStore(redis_client, settings.draft_ttl_seconds),
         max_attempts=settings.job_max_attempts,
         retry_base_seconds=settings.job_retry_base_seconds,
+        history=history,
     )
 
 
-def create_app(settings: ReviewerSettings | None = None, worker: ReviewWorker | None = None) -> FastAPI:
+def create_app(
+    settings: ReviewerSettings | None = None,
+    worker: ReviewWorker | None = None,
+    history: ReviewHistory | None = None,
+) -> FastAPI:
     settings = settings or ReviewerSettings()
     configure_logging(settings.log_level, settings.log_format)
     configure_tracing("pr-reviewer-worker", settings.otel_exporter_otlp_endpoint)
-    worker = worker or build_worker(settings)
+    history = history or ReviewHistory(settings.history_database_url)
+    worker = worker or build_worker(settings, history)
     thread = threading.Thread(target=worker.run, name="review-worker", daemon=True)
 
     @asynccontextmanager
@@ -77,5 +84,20 @@ def create_app(settings: ReviewerSettings | None = None, worker: ReviewWorker | 
         if not thread.is_alive():
             return JSONResponse({"status": "worker stopped"}, status_code=503)
         return JSONResponse({"status": "ok"})
+
+    @app.get("/api/reviews")
+    def list_reviews(status: str | None = None, limit: int = Query(50, ge=1, le=200)) -> list[ReviewRecord]:
+        return history.list(status, limit)
+
+    @app.get("/api/reviews/{delivery_id}")
+    def get_review(delivery_id: str) -> ReviewRecord:
+        record = history.get(delivery_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="review not found")
+        return record
+
+    @app.get("/api/stats")
+    def stats() -> dict[str, int]:
+        return history.counts()
 
     return app

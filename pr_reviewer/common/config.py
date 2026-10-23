@@ -54,6 +54,8 @@ class ReviewerSettings(QueueSettings):
     review_mode: Literal["auto", "approval"] = "auto"
     max_findings: int = 15
     draft_ttl_seconds: int = 7 * 24 * 3600
+    # Review history served to the dashboard; any SQLAlchemy URL works (e.g. Postgres).
+    history_database_url: str = "sqlite:///reviews.db"
 
     @field_validator("github_private_key", mode="before")
     @classmethod

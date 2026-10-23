@@ -3,7 +3,7 @@
 import logging
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from typing import Any, Literal
 
@@ -22,6 +22,7 @@ from pr_reviewer.reviewer.agent import ReviewAgent
 from pr_reviewer.reviewer.budget import TokenBudget
 from pr_reviewer.reviewer.conventions import guideline_documents, review_comment_documents
 from pr_reviewer.reviewer.drafts import DraftStore, InMemoryDraftStore, ReviewDraft, draft_key
+from pr_reviewer.reviewer.history import ReviewHistory
 from pr_reviewer.reviewer.pipeline import PipelineOptions, PipelineOutput, run_review_pipeline
 from pr_reviewer.reviewer.publisher import build_draft_comment, build_review
 from pr_reviewer.reviewer.repo_tools import GitHubRepoReader, RepoReader
@@ -96,6 +97,7 @@ class ReviewWorker:
         drafts: DraftStore | None = None,
         max_attempts: int = DEFAULT_JOB_ATTEMPTS,
         retry_base_seconds: float = DEFAULT_RETRY_BASE_SECONDS,
+        history: ReviewHistory | None = None,
     ):
         self._queue = queue
         self._github = github
@@ -107,6 +109,7 @@ class ReviewWorker:
         self._drafts = drafts if drafts is not None else InMemoryDraftStore()
         self._max_attempts = max_attempts
         self._retry_base_seconds = retry_base_seconds
+        self._history = history
         self._stop = threading.Event()
 
     def handle(self, job: ReviewJob) -> None:
@@ -121,6 +124,8 @@ class ReviewWorker:
             if job.attempt == 1:
                 metrics.QUEUE_WAIT.observe(max(0.0, time.time() - job.enqueued_at))
             started = time.monotonic()
+            if job.kind == "review":
+                self._record(lambda h: h.started(job))
             try:
                 outcome = self.process(job)
             except Exception as error:
@@ -137,10 +142,14 @@ class ReviewWorker:
         if is_retryable(error) and job.attempt < self._max_attempts:
             delay = self._retry_base_seconds * 4 ** (job.attempt - 1)
             self._queue.schedule(job.model_copy(update={"attempt": job.attempt + 1}), delay)
+            if job.kind == "review":
+                self._record(lambda h: h.failed(job, "retrying", f"{type(error).__name__}: {error}"))
             metrics.REVIEW_JOBS.labels(kind=job.kind, outcome="retry").inc()
             logger.warning("Job failed, retrying in %.0fs: %r", delay, error, exc_info=True)
             return
         self._queue.dead_letter(job, f"{type(error).__name__}: {error}")
+        if job.kind == "review":
+            self._record(lambda h: h.failed(job, "failed", f"{type(error).__name__}: {error}"))
         metrics.REVIEW_JOBS.labels(kind=job.kind, outcome="dead_letter").inc()
         logger.error("Job failed permanently, moved to dead-letter queue: %r", error, exc_info=True)
 
@@ -158,6 +167,7 @@ class ReviewWorker:
         if job.head_sha and job.head_sha != head_sha:
             # A newer push already queued its own job; don't review stale code.
             logger.info("Skipping stale job")
+            self._record(lambda h: h.finished(job, "skipped", note="a newer commit was pushed"))
             return "skipped"
 
         with tracer.start_as_current_span("github.list_pull_request_files"):
@@ -174,11 +184,14 @@ class ReviewWorker:
         )
         if output is None:
             logger.info("Nothing reviewable files=%d", len(files))
+            self._record(lambda h: h.finished(job, "skipped", head_sha=head_sha, note="no reviewable files"))
             return "skipped"
 
         body, comments = build_review(output.result, output.files, output.omitted)
         with publishing("github.publish", review_mode=self._review_mode):
             self._publish(job, head_sha, output, body, comments)
+        status = "awaiting_approval" if self._review_mode == "approval" else "published"
+        self._record(lambda h: h.finished(job, status, output, head_sha=head_sha))
 
         run = output.run
         for f in output.result.findings:
@@ -223,6 +236,7 @@ class ReviewWorker:
             return "skipped"
         if draft.head_sha != pr["head"]["sha"]:
             self._drafts.delete(key)
+            self._resolve_draft(job, "dismissed", "new commits since the draft")
             self._reply(
                 job,
                 f"The draft was for `{draft.head_sha[:7]}`, but the PR has new commits since. "
@@ -236,14 +250,28 @@ class ReviewWorker:
                 job.installation_id, job.owner, job.repo, job.pr_number, draft.head_sha, body, draft.comments
             )
         self._drafts.delete(key)
+        self._resolve_draft(job, "approved", f"approved by @{job.requested_by}")
         logger.info("Published approved draft by=%s", job.requested_by)
         return "success"
 
     def _dismiss(self, job: ReviewJob) -> JobOutcome:
         self._drafts.delete(draft_key(job.owner, job.repo, job.pr_number))
+        self._resolve_draft(job, "dismissed", f"dismissed by @{job.requested_by}")
         self._reply(job, f"AI review draft dismissed by @{job.requested_by}.")
         logger.info("Dismissed draft by=%s", job.requested_by)
         return "success"
+
+    def _record(self, write: Callable[[ReviewHistory], None]) -> None:
+        """History only feeds the dashboard: failing to write it must never fail or repeat a review."""
+        if self._history is None:
+            return
+        try:
+            write(self._history)
+        except Exception:
+            logger.exception("Could not record review history")
+
+    def _resolve_draft(self, job: ReviewJob, status: Literal["approved", "dismissed"], note: str) -> None:
+        self._record(lambda h: h.resolve_draft(job.owner, job.repo, job.pr_number, status, note))
 
     def _reply(self, job: ReviewJob, text: str) -> None:
         self._github.create_issue_comment(job.installation_id, job.owner, job.repo, job.pr_number, text)

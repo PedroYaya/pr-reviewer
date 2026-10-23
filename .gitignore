@@ -54,6 +54,9 @@ Thumbs.db
 *.log
 logs/
 
+# Review history (SQLite)
+*.db
+
 # Temporary files
 *.tmp
 *.temp

@@ -14,6 +14,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 RUN useradd --create-home --uid 10001 app
 COPY --from=build /wheels /wheels
 RUN pip install --no-cache-dir --no-index /wheels/* && rm -rf /wheels
+# The reviewer's SQLite review history lives here (a volume in docker-compose).
+RUN mkdir /home/app/data && chown app:app /home/app/data
 
 USER app
 WORKDIR /home/app
