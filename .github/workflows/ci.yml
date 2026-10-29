@@ -1,39 +1,51 @@
 name: CI
 
+# When it runs: every push to main and every PR.
 on:
   push:
     branches: [main]
   pull_request:
 
+# Least privilege: the workflow can only read the code.
 permissions:
   contents: read
 
+# A new push to the same branch cancels the old run.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# The 3 jobs below run in parallel.
 jobs:
+  # Job 1: unit tests.
   test:
     runs-on: ubuntu-latest
+    # Runs the job twice: once per Python version.
     strategy:
       matrix:
         python-version: ["3.11", "3.12"]
     steps:
+      # Downloads the repo code.
       - uses: actions/checkout@v4
+      # Installs Python and caches pip downloads.
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
           cache-dependency-path: pyproject.toml
+      # Installs the app plus test dependencies.
       - run: pip install -e ".[dev,otel]"
       # No Redis, GitHub or OpenAI needed: the suite uses fakes and a scripted LLM.
       - run: pytest -q
 
+  # Job 2: the Docker image builds and the app really starts.
   docker:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Docker builder with layer caching.
       - uses: docker/setup-buildx-action@v3
+      # Builds locally only; nothing is pushed.
       - name: Build image
         uses: docker/build-push-action@v6
         with:
@@ -43,10 +55,13 @@ jobs:
           tags: pr-reviewer:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      # Smoke test: starts Redis + both services, then hits /health and /metrics.
       - name: Both services start and report healthy
         run: |
+          # Shared network so the containers can reach Redis.
           docker network create ci
           docker run -d --name redis --network ci redis:7-alpine
+          # Same image, two services: gateway on 8000, reviewer on 8001.
           for service in gateway reviewer; do
             port=$([ "$service" = gateway ] && echo 8000 || echo 8001)
             docker run -d --name "$service" --network ci -p "$port:$port" \
@@ -54,13 +69,16 @@ jobs:
               -e GITHUB_WEBHOOK_SECRET=ci -e GITHUB_APP_ID=1 -e GITHUB_PRIVATE_KEY=unused -e OPENAI_API_KEY=unused \
               pr-reviewer:ci
           done
+          # Retries while the services boot; fails if they never get healthy.
           for port in 8000 8001; do
             curl --retry 15 --retry-delay 2 --retry-all-errors -sf "http://localhost:$port/health"
             curl -sf "http://localhost:$port/metrics" | grep -q prr_
           done
+      # Only on failure: prints container logs for debugging.
       - if: failure()
         run: docker logs gateway; docker logs reviewer
 
+  # Job 3: checks the AWS infrastructure code without touching AWS.
   terraform:
     runs-on: ubuntu-latest
     defaults:
@@ -71,6 +89,9 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.9.8
+      # Fails if the files aren't formatted.
       - run: terraform fmt -check -recursive
+      # Downloads providers only; no real AWS state.
       - run: terraform init -backend=false
+      # Checks syntax and references.
       - run: terraform validate

@@ -3,16 +3,20 @@ name: Deploy
 # Runs after CI passes on main. Builds the image, pushes it to ECR and rolls
 # both ECS services onto it. AWS access uses GitHub OIDC: no long-lived keys.
 on:
+  # Starts when the CI workflow finishes on main.
   workflow_run:
     workflows: [CI]
     types: [completed]
     branches: [main]
+  # Also allows a manual run from the Actions tab.
   workflow_dispatch:
 
 permissions:
   contents: read
+  # Needed to request the OIDC token that AWS trusts.
   id-token: write
 
+# Only one deploy at a time, and never cut one off halfway.
 concurrency:
   group: deploy-production
   cancel-in-progress: false
@@ -22,36 +26,44 @@ jobs:
     # Skipped in forks and copies that have no AWS account configured.
     if: vars.AWS_DEPLOY_ROLE_ARN != '' && (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
+    # GitHub environment: can require manual approval.
     environment: production
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
       CLUSTER: ${{ vars.ECS_CLUSTER }}
+      # Image tag = commit SHA, so you know exactly what's running.
       IMAGE_TAG: ${{ github.event.workflow_run.head_sha || github.sha }}
     steps:
+      # Checks out the exact commit that passed CI.
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.IMAGE_TAG }}
 
+      # Step 1: logs in to AWS with temporary credentials (OIDC).
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
+      # Step 2: logs Docker in to ECR (the AWS image registry).
       - id: ecr
         uses: aws-actions/amazon-ecr-login@v2
 
       - uses: docker/setup-buildx-action@v3
 
+      # Step 3: builds the image and pushes it to ECR.
       - name: Build and push image
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
+          # Fargate runs x86 machines.
           platforms: linux/amd64
           tags: ${{ steps.ecr.outputs.registry }}/${{ vars.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # Step 4: gets the current task definitions from ECS.
       # Terraform owns the task definitions; the pipeline only swaps the image.
       - name: Download current task definitions
         run: |
@@ -60,6 +72,7 @@ jobs:
               --query taskDefinition > "$service-task.json"
           done
 
+      # Step 5: writes the new image into each task definition.
       - id: gateway-task
         uses: aws-actions/amazon-ecs-render-task-definition@v1
         with:
@@ -74,6 +87,7 @@ jobs:
           container-name: app
           image: ${{ steps.ecr.outputs.registry }}/${{ vars.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
 
+      # Step 6: rolls out each service and waits until it's healthy.
       # Reviewer first: new workers can read jobs queued by the old gateway.
       - name: Deploy reviewer
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2

@@ -3,13 +3,16 @@ name: Evals
 # The eval suite calls OpenAI, so it doesn't run on every push: run it by hand,
 # weekly, or on a PR labelled `run-evals` that touches the reviewer or the cases.
 on:
+  # Manual run, with how many times to repeat each case.
   workflow_dispatch:
     inputs:
       repeat:
         description: Runs per case
         default: "1"
+  # Every Monday at 06:00 UTC.
   schedule:
     - cron: "0 6 * * 1"
+  # PRs that change the reviewer or the eval cases.
   pull_request:
     types: [labeled, synchronize]
     paths:
@@ -25,8 +28,10 @@ jobs:
     # EVALS_ENABLED is a repository variable, set where the OpenAI key is configured.
     if: vars.EVALS_ENABLED == 'true' && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-evals'))
     runs-on: ubuntu-latest
+    # Stops a stuck run so it doesn't burn minutes.
     timeout-minutes: 45
     env:
+      # The key comes from GitHub Secrets, never from the code.
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
     steps:
       - uses: actions/checkout@v4
@@ -36,6 +41,7 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
       - run: pip install -e .
+      # Fails early with a clear message if the key is missing.
       - name: Check the OpenAI key is configured
         run: |
           if [ -z "$OPENAI_API_KEY" ]; then
@@ -50,9 +56,12 @@ jobs:
             --repeat "${{ inputs.repeat || '1' }}" \
             --fail-under-useful 0.7 \
             --fail-under-recall 0.8 | tee eval-report.txt
+      # always(): runs even if the evals failed.
+      # Shows the report on the run's summary page.
       - if: always()
         run: |
           { echo '## Eval results'; echo '```'; cat eval-report.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      # Saves the JSON results as a downloadable file.
       - if: always()
         uses: actions/upload-artifact@v4
         with:
